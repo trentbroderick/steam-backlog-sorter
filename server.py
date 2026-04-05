@@ -968,6 +968,570 @@ async def steam_run_query(params: RunSQLInput) -> str:
 
 
 # =============================================================================
+# Steam API Helpers (for sync operations)
+# =============================================================================
+
+STEAM_API_BASE = "http://api.steampowered.com"
+STEAM_STORE_BASE = "https://store.steampowered.com"
+
+
+async def _steam_api_get(url: str, params: dict) -> Optional[dict]:
+    """Hit a Steam API endpoint with error handling."""
+    async with httpx.AsyncClient(timeout=30) as client:
+        try:
+            resp = await client.get(url, params=params)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception:
+            pass
+    return None
+
+
+async def _fetch_player_achievements(app_id: int) -> tuple:
+    """Fetch achievements for a game. Returns (ach_list, unlocked, total)."""
+    # Player achievements
+    data = await _steam_api_get(
+        f"{STEAM_API_BASE}/ISteamUserStats/GetPlayerAchievements/v0001/",
+        {"appid": app_id, "key": STEAM_API_KEY, "steamid": STEAM_ID}
+    )
+    if not data or "playerstats" not in data:
+        return [], 0, 0
+    ps = data["playerstats"]
+    if not ps.get("success") or "achievements" not in ps:
+        return [], 0, 0
+
+    raw_achs = ps["achievements"]
+
+    # Global percentages
+    gdata = await _steam_api_get(
+        f"{STEAM_API_BASE}/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v0002/",
+        {"gameid": app_id}
+    )
+    gpcts = {}
+    if gdata and "achievementpercentages" in gdata:
+        for a in gdata["achievementpercentages"].get("achievements", []):
+            gpcts[a["name"]] = a["percent"]
+
+    # Schema for display names
+    sdata = await _steam_api_get(
+        f"{STEAM_API_BASE}/ISteamUserStats/GetSchemaForGame/v2/",
+        {"key": STEAM_API_KEY, "appid": app_id}
+    )
+    smap = {}
+    if sdata and "game" in sdata:
+        for a in sdata["game"].get("availableGameStats", {}).get("achievements", []):
+            smap[a["name"]] = {"display_name": a.get("displayName", a["name"]),
+                               "description": a.get("description", "")}
+
+    result = []
+    unlocked = 0
+    for a in raw_achs:
+        api_name = a["apiname"]
+        is_unlocked = a.get("achieved", 0) == 1
+        if is_unlocked:
+            unlocked += 1
+        s = smap.get(api_name, {})
+        result.append({
+            "api_name": api_name,
+            "display_name": s.get("display_name", api_name),
+            "description": s.get("description", ""),
+            "unlocked": is_unlocked,
+            "unlock_time": a.get("unlocktime", 0) if is_unlocked else None,
+            "global_pct": gpcts.get(api_name, 0)
+        })
+
+    return result, unlocked, len(raw_achs)
+
+
+async def _fetch_store_data(app_id: int) -> Optional[dict]:
+    """Fetch Steam Store metadata for a game."""
+    async with httpx.AsyncClient(timeout=15) as client:
+        try:
+            resp = await client.get(f"{STEAM_STORE_BASE}/api/appdetails",
+                                    params={"appids": app_id})
+            if resp.status_code == 200:
+                data = resp.json()
+                key = str(app_id)
+                if key in data and data[key].get("success"):
+                    return data[key]["data"]
+        except Exception:
+            pass
+    return None
+
+
+async def _fetch_reviews(app_id: int) -> tuple:
+    """Fetch review score, count, description for a game."""
+    async with httpx.AsyncClient(timeout=15) as client:
+        try:
+            resp = await client.get(
+                f"{STEAM_STORE_BASE}/appreviews/{app_id}",
+                params={"json": 1, "language": "all", "purchase_type": "all"}
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                qs = data.get("query_summary", {})
+                total = qs.get("total_reviews", 0)
+                pos = qs.get("total_positive", 0)
+                desc = qs.get("review_score_desc", "")
+                score = (pos / total * 100) if total > 0 else None
+                return score, total, desc
+        except Exception:
+            pass
+    return None, None, None
+
+
+async def _fetch_deck_status(app_id: int) -> str:
+    """Fetch Steam Deck compatibility status."""
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            resp = await client.get(
+                f"{STEAM_STORE_BASE}/saleaction/ajaxgetdeckappcompatibilityreport",
+                params={"nAppID": app_id}
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                cat = data.get("results", {}).get("resolved_category", 0)
+                return {1: "unsupported", 2: "playable", 3: "verified"}.get(cat, "unknown")
+        except Exception:
+            pass
+    return "unknown"
+
+
+async def _fetch_hltb(game_name: str) -> tuple:
+    """Fetch HowLongToBeat times. Returns (main, extra, completionist)."""
+    try:
+        from howlongtobeatpy import HowLongToBeat
+        import re
+        clean = re.sub(r"[™®©:]", "", game_name)
+        clean = re.sub(r"\s*(edition|goty|deluxe|remastered|definitive|complete|collection).*$",
+                       "", clean, flags=re.IGNORECASE).strip()
+        results = await HowLongToBeat().async_search(clean)
+        if results:
+            best = max(results, key=lambda r: r.similarity)
+            if best.similarity > 0.3:
+                return (best.main_story or None,
+                        best.main_extra or None,
+                        best.completionist or None)
+    except Exception:
+        pass
+    return None, None, None
+
+
+async def _batch_execute_turso(statements: list) -> None:
+    """Execute multiple write statements in a single Turso batch."""
+    async with libsql_client.create_client(url=TURSO_URL, auth_token=TURSO_TOKEN) as client:
+        await client.batch(statements)
+
+
+# =============================================================================
+# Sync Tools
+# =============================================================================
+
+class SyncRefreshInput(BaseModel):
+    """Input for bi-weekly metadata refresh."""
+    offset: int = Field(default=0, description="Start from this game index (for batched processing)", ge=0)
+    batch_size: int = Field(default=75, description="Number of games to process per call", ge=10, le=150)
+
+
+@mcp.tool(name="steam_sync_recent")
+async def steam_sync_recent() -> str:
+    """Daily sync: check recently played games and update playtime + achievements.
+
+    Hits the Steam API for the last 25 recently played games, compares with
+    the database, and updates playtime, last_played, and achievement progress
+    for any games with changes.
+    """
+    try:
+        if not STEAM_API_KEY:
+            return "Error: STEAM_API_KEY not configured."
+
+        # Get recently played from Steam
+        data = await _steam_api_get(
+            f"{STEAM_API_BASE}/IPlayerService/GetRecentlyPlayedGames/v0001/",
+            {"key": STEAM_API_KEY, "steamid": STEAM_ID, "count": 25, "format": "json"}
+        )
+        if not data or "response" not in data:
+            return "Error: Could not fetch recently played games from Steam."
+
+        games = data["response"].get("games", [])
+        if not games:
+            return "No recently played games found."
+
+        updated = []
+        ach_updated = []
+        errors = []
+
+        for g in games:
+            app_id = g["appid"]
+            new_playtime = g.get("playtime_forever", 0)
+            name = g.get("name", f"AppID {app_id}")
+
+            try:
+                # Get current DB state
+                db_rows = await _query_turso(
+                    "SELECT playtime_minutes, achievements_unlocked, achievements_total FROM games WHERE app_id = ?",
+                    [app_id]
+                )
+
+                if not db_rows:
+                    # Game not in DB yet — skip (weekly sync handles new games)
+                    continue
+
+                old = db_rows[0]
+                old_playtime = old.get("playtime_minutes", 0) or 0
+                changes = []
+
+                # Update playtime if changed
+                if new_playtime != old_playtime:
+                    now_iso = datetime.now().isoformat()
+                    await _execute_turso(
+                        """UPDATE games SET playtime_minutes = ?, last_played = ?,
+                           last_played_date = DATE('now'), updated_at = ?
+                           WHERE app_id = ?""",
+                        [new_playtime, int(datetime.now().timestamp()), now_iso, app_id]
+                    )
+                    diff = new_playtime - old_playtime
+                    changes.append(f"+{diff}min playtime ({_format_hours(old_playtime)} → {_format_hours(new_playtime)})")
+
+                    # Auto-set status to in_progress if was unplayed
+                    if old_playtime == 0 and new_playtime > 0:
+                        await _execute_turso(
+                            "UPDATE games SET status = 'in_progress' WHERE app_id = ? AND status = 'unplayed'",
+                            [app_id]
+                        )
+                        changes.append("status → in_progress")
+
+                # Re-check achievements
+                if old.get("achievements_total", 0) and old.get("achievements_total", 0) > 0:
+                    achs, new_unlocked, total = await _fetch_player_achievements(app_id)
+                    old_unlocked = old.get("achievements_unlocked", 0) or 0
+
+                    if new_unlocked != old_unlocked:
+                        pct = (new_unlocked / total * 100) if total > 0 else 0
+                        await _execute_turso(
+                            "UPDATE games SET achievements_unlocked = ?, completion_pct = ?, updated_at = ? WHERE app_id = ?",
+                            [new_unlocked, pct, datetime.now().isoformat(), app_id]
+                        )
+                        changes.append(f"achievements {old_unlocked} → {new_unlocked}/{total} ({pct:.0f}%)")
+
+                        # Update individual achievements
+                        for a in achs:
+                            if a["unlocked"]:
+                                await _execute_turso(
+                                    """UPDATE achievements SET unlocked = 1, unlock_time = ?,
+                                       global_pct = ? WHERE app_id = ? AND api_name = ?""",
+                                    [a["unlock_time"], a["global_pct"], app_id, a["api_name"]]
+                                )
+                        ach_updated.append(name)
+
+                        await asyncio.sleep(1)  # Rate limit
+
+                if changes:
+                    updated.append(f"**{name}**: {', '.join(changes)}")
+
+            except Exception as e:
+                errors.append(f"{name}: {e}")
+
+        # Log the sync
+        await _execute_turso(
+            "INSERT INTO sync_log (sync_time, sync_type, games_updated, status) VALUES (?, ?, ?, ?)",
+            [datetime.now().isoformat(), "daily_recent", len(updated),
+             "success" if not errors else "partial"]
+        )
+
+        lines = [f"## Daily Sync Complete\n"]
+        lines.append(f"Checked **{len(games)}** recently played games.\n")
+        if updated:
+            lines.append(f"### Updated ({len(updated)} games):")
+            for u in updated:
+                lines.append(f"- {u}")
+        else:
+            lines.append("No changes detected — database is up to date.")
+
+        if ach_updated:
+            lines.append(f"\n**Achievement progress updated for:** {', '.join(ach_updated)}")
+
+        if errors:
+            lines.append(f"\n### Errors ({len(errors)}):")
+            for e in errors[:5]:
+                lines.append(f"- {e}")
+
+        return "\n".join(lines)
+
+    except Exception as e:
+        return f"Error in daily sync: {e}"
+
+
+@mcp.tool(name="steam_sync_new_games")
+async def steam_sync_new_games() -> str:
+    """Weekly sync: detect newly purchased games, add to database with full enrichment.
+
+    Fetches full owned games list from Steam, compares with database,
+    and adds any new games with complete enrichment (store data, reviews,
+    HLTB times, Deck compatibility, achievements).
+    """
+    try:
+        if not STEAM_API_KEY:
+            return "Error: STEAM_API_KEY not configured."
+
+        # Get full owned games list
+        data = await _steam_api_get(
+            f"{STEAM_API_BASE}/IPlayerService/GetOwnedGames/v0001/",
+            {"key": STEAM_API_KEY, "steamid": STEAM_ID,
+             "include_appinfo": 1, "include_played_free_games": 1, "format": "json"}
+        )
+        if not data or "response" not in data:
+            return "Error: Could not fetch owned games from Steam."
+
+        steam_games = data["response"].get("games", [])
+
+        # Get existing app_ids from DB
+        db_rows = await _query_turso("SELECT app_id FROM games")
+        existing_ids = {r["app_id"] for r in db_rows}
+
+        new_games = [g for g in steam_games if g["appid"] not in existing_ids]
+
+        if not new_games:
+            await _execute_turso(
+                "INSERT INTO sync_log (sync_time, sync_type, games_added, status) VALUES (?, ?, 0, 'success')",
+                [datetime.now().isoformat(), "weekly_new_games"]
+            )
+            return f"## Weekly Sync Complete\n\nNo new games detected. Library still at **{len(existing_ids)}** games."
+
+        added = []
+        errors = []
+
+        for g in new_games:
+            app_id = g["appid"]
+            name = g.get("name", f"AppID {app_id}")
+            playtime = g.get("playtime_forever", 0)
+
+            try:
+                # Fetch store data for enrichment
+                store = await _fetch_store_data(app_id)
+                await asyncio.sleep(1.5)  # Rate limit
+
+                # Extract store metadata
+                genres = ""
+                primary_genre = "Unknown"
+                developer = ""
+                publisher = ""
+                release_date = ""
+                metacritic = None
+
+                if store:
+                    genre_list = store.get("genres", [])
+                    if genre_list:
+                        genres = ", ".join([gn.get("description", "") for gn in genre_list])
+                        primary_genre = genre_list[0].get("description", "Unknown")
+                    devs = store.get("developers", [])
+                    developer = devs[0] if devs else ""
+                    pubs = store.get("publishers", [])
+                    publisher = pubs[0] if pubs else ""
+                    rd = store.get("release_date", {})
+                    release_date = rd.get("date", "")
+                    mc = store.get("metacritic", {})
+                    metacritic = mc.get("score") if mc else None
+
+                # Fetch reviews
+                review_score, review_count, review_desc = await _fetch_reviews(app_id)
+                await asyncio.sleep(0.5)
+
+                # Fetch Deck status
+                deck_status = await _fetch_deck_status(app_id)
+
+                # Fetch HLTB
+                hltb_main, hltb_extra, hltb_comp = await _fetch_hltb(name)
+
+                # Fetch achievements
+                achs, ach_unlocked, ach_total = await _fetch_player_achievements(app_id)
+                pct = (ach_unlocked / ach_total * 100) if ach_total > 0 else 0
+                await asyncio.sleep(1)
+
+                # Determine status
+                status = "in_progress" if playtime > 0 else "unplayed"
+
+                # Insert game
+                await _execute_turso(
+                    """INSERT INTO games (app_id, name, playtime_minutes, last_played,
+                       achievements_total, achievements_unlocked, completion_pct,
+                       hltb_main_hours, hltb_extra_hours, hltb_completionist_hours,
+                       deck_status, review_score, review_count, review_desc, metacritic,
+                       primary_genre, all_genres, developer, publisher, release_date,
+                       status, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    [app_id, name, playtime, g.get("rtime_last_played", 0),
+                     ach_total, ach_unlocked, pct,
+                     hltb_main, hltb_extra, hltb_comp,
+                     deck_status, review_score, review_count, review_desc, metacritic,
+                     primary_genre, genres, developer, publisher, release_date,
+                     status, datetime.now().isoformat()]
+                )
+
+                # Insert achievements
+                for a in achs:
+                    await _execute_turso(
+                        """INSERT OR IGNORE INTO achievements (app_id, api_name, display_name,
+                           description, unlocked, unlock_time, global_pct)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        [app_id, a["api_name"], a["display_name"], a["description"],
+                         a["unlocked"], a["unlock_time"], a["global_pct"]]
+                    )
+
+                hltb_str = f"{hltb_main:.0f}h" if hltb_main else "?"
+                added.append(f"**{name}** — {primary_genre} | Reviews: {review_desc or 'N/A'} | "
+                             f"HLTB: {hltb_str} | Deck: {deck_status} | {ach_total} achievements")
+
+            except Exception as e:
+                errors.append(f"{name}: {e}")
+
+        # Log
+        await _execute_turso(
+            "INSERT INTO sync_log (sync_time, sync_type, games_added, status) VALUES (?, ?, ?, ?)",
+            [datetime.now().isoformat(), "weekly_new_games", len(added),
+             "success" if not errors else "partial"]
+        )
+
+        lines = [f"## Weekly Sync Complete\n"]
+        lines.append(f"Library: **{len(existing_ids)}** → **{len(existing_ids) + len(added)}** games\n")
+        if added:
+            lines.append(f"### New Games Added ({len(added)}):")
+            for a in added:
+                lines.append(f"- {a}")
+        if errors:
+            lines.append(f"\n### Errors ({len(errors)}):")
+            for e in errors[:10]:
+                lines.append(f"- {e}")
+
+        return "\n".join(lines)
+
+    except Exception as e:
+        return f"Error in weekly sync: {e}"
+
+
+@mcp.tool(name="steam_sync_refresh_metadata")
+async def steam_sync_refresh_metadata(params: SyncRefreshInput) -> str:
+    """Bi-weekly sync: refresh review scores, Deck status, and genres for a batch of games.
+
+    Processes games in batches to respect API rate limits. Call repeatedly with
+    increasing offset until all games are processed. Each call handles ~75 games.
+    """
+    try:
+        # Get batch of games
+        games = await _query_turso(
+            "SELECT app_id, name, review_score, deck_status, all_genres FROM games ORDER BY app_id LIMIT ? OFFSET ?",
+            [params.batch_size, params.offset]
+        )
+
+        if not games:
+            return f"## Metadata Refresh Complete\n\nNo more games to process (offset {params.offset})."
+
+        total_count = await _query_turso("SELECT COUNT(*) as total FROM games")
+        total = total_count[0]["total"] if total_count else 0
+
+        updated = []
+        errors = []
+
+        for g in games:
+            app_id = g["app_id"]
+            name = g["name"]
+            changes = []
+
+            try:
+                # Refresh reviews
+                new_score, new_count, new_desc = await _fetch_reviews(app_id)
+                await asyncio.sleep(1.5)  # Rate limit for store API
+
+                if new_score is not None:
+                    old_score = g.get("review_score")
+                    if old_score is None or abs((new_score or 0) - (old_score or 0)) >= 0.5:
+                        changes.append(f"reviews: {old_score or 0:.0f}% → {new_score:.0f}%")
+
+                    await _execute_turso(
+                        "UPDATE games SET review_score = ?, review_count = ?, review_desc = ?, updated_at = ? WHERE app_id = ?",
+                        [new_score, new_count, new_desc, datetime.now().isoformat(), app_id]
+                    )
+
+                # Refresh Deck status
+                new_deck = await _fetch_deck_status(app_id)
+                if new_deck != "unknown":
+                    old_deck = g.get("deck_status", "unknown")
+                    if new_deck != old_deck:
+                        changes.append(f"Deck: {old_deck} → {new_deck}")
+                    await _execute_turso(
+                        "UPDATE games SET deck_status = ?, updated_at = ? WHERE app_id = ?",
+                        [new_deck, datetime.now().isoformat(), app_id]
+                    )
+
+                # Refresh genres from store
+                store = await _fetch_store_data(app_id)
+                await asyncio.sleep(1)
+                if store:
+                    genre_list = store.get("genres", [])
+                    if genre_list:
+                        new_genres = ", ".join([gn.get("description", "") for gn in genre_list])
+                        new_primary = genre_list[0].get("description", "Unknown")
+                        old_genres = g.get("all_genres", "")
+                        if new_genres != old_genres:
+                            changes.append(f"genres updated")
+                        await _execute_turso(
+                            "UPDATE games SET primary_genre = ?, all_genres = ?, updated_at = ? WHERE app_id = ?",
+                            [new_primary, new_genres, datetime.now().isoformat(), app_id]
+                        )
+
+                    # Also refresh metacritic if available
+                    mc = store.get("metacritic", {})
+                    if mc and mc.get("score"):
+                        await _execute_turso(
+                            "UPDATE games SET metacritic = ? WHERE app_id = ?",
+                            [mc["score"], app_id]
+                        )
+
+                if changes:
+                    updated.append(f"**{name}**: {', '.join(changes)}")
+
+            except Exception as e:
+                errors.append(f"{name}: {e}")
+
+        # Log
+        await _execute_turso(
+            "INSERT INTO sync_log (sync_time, sync_type, games_updated, status) VALUES (?, ?, ?, ?)",
+            [datetime.now().isoformat(), f"biweekly_metadata_offset_{params.offset}",
+             len(updated), "success" if not errors else "partial"]
+        )
+
+        processed_through = params.offset + len(games)
+        more_remaining = processed_through < total
+
+        lines = [f"## Metadata Refresh — Batch {params.offset // params.batch_size + 1}\n"]
+        lines.append(f"Processed games **{params.offset + 1}–{processed_through}** of **{total}**\n")
+
+        if updated:
+            lines.append(f"### Changes Detected ({len(updated)}):")
+            for u in updated[:20]:
+                lines.append(f"- {u}")
+            if len(updated) > 20:
+                lines.append(f"- ... and {len(updated) - 20} more")
+        else:
+            lines.append("No significant changes in this batch.")
+
+        if errors:
+            lines.append(f"\n### Errors ({len(errors)}):")
+            for e in errors[:5]:
+                lines.append(f"- {e}")
+
+        if more_remaining:
+            lines.append(f"\n**More games remaining.** Call again with `offset={processed_through}` to continue.")
+        else:
+            lines.append(f"\n**All {total} games processed.** Full refresh complete.")
+
+        return "\n".join(lines)
+
+    except Exception as e:
+        return f"Error in metadata refresh: {e}"
+
+
+# =============================================================================
 # Entry point (local development only — Horizon ignores __main__)
 # =============================================================================
 
