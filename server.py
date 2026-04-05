@@ -14,13 +14,10 @@ from typing import Optional, List, Dict, Any
 from enum import Enum
 from datetime import datetime
 
-import nest_asyncio
-nest_asyncio.apply()
-
 import httpx
 import libsql_client
 from pydantic import BaseModel, Field, ConfigDict, field_validator
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 # =============================================================================
 # Configuration
@@ -971,19 +968,8 @@ async def steam_run_query(params: RunSQLInput) -> str:
 
 
 # =============================================================================
-# Entry point
+# Entry point (local development only — Horizon ignores __main__)
 # =============================================================================
 
-# Expose the app for ASGI servers (used by Horizon/hosted environments)
-app = mcp.streamable_http_app()
-
 if __name__ == "__main__":
-    import sys
-
-    # Check if we should run in HTTP mode (for hosted environments like Horizon)
-    if "--http" in sys.argv or os.environ.get("MCP_TRANSPORT") == "http":
-        port = int(os.environ.get("PORT", "8081"))
-        mcp.run(transport="streamable-http", host="0.0.0.0", port=port)
-    else:
-        # Default: stdio for local Claude Desktop
-        mcp.run()
+    mcp.run()
