@@ -14,6 +14,9 @@ from typing import Optional, List, Dict, Any
 from enum import Enum
 from datetime import datetime
 
+import nest_asyncio
+nest_asyncio.apply()
+
 import httpx
 import libsql_client
 from pydantic import BaseModel, Field, ConfigDict, field_validator
