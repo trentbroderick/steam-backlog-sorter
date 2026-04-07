@@ -23,8 +23,8 @@ from fastmcp import FastMCP
 try:
     from prefab_ui.app import PrefabApp
     from prefab_ui.components import (
-        Column, Row, Grid, Card, CardContent, Heading,
-        Badge, Muted, Separator,
+        Column, Row, Grid, Card, CardContent, CardHeader, CardTitle, CardDescription,
+        Heading, Badge, Muted, Separator, Image, Progress,
     )
     _HAS_PREFAB = True
 except Exception:
@@ -422,30 +422,43 @@ def _build_recommendations_app(top, device_label: str, mood: Optional[str], hour
         Heading(f"🎮 Recommended for {device_label}")
         Muted(subtitle)
         Separator()
-        with Grid(cols=3, gap=4):
+        with Grid(columns=3, gap=4):
             for i, (score, g, reasons) in enumerate(top, 1):
-                pt  = g.get("playtime_minutes") or 0
+                pt   = g.get("playtime_minutes") or 0
                 hltb = g.get("hltb_main_hours")
                 pct  = g.get("completion_pct") or 0
-                rs   = g.get("review_score")
-                with Card():
+                rs   = g.get("review_score") or 0
+                app_id = g.get("app_id")
+                with Card(css_class="overflow-hidden"):
+                    if app_id:
+                        Image(
+                            src=f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/header.jpg",
+                            alt=g["name"],
+                            css_class="w-full object-cover",
+                            height="140px",
+                        )
+                    with CardHeader():
+                        CardTitle(content=f"{i}. {g['name']}")
+                        CardDescription(content=g.get("developer") or g.get("primary_genre") or "")
                     with CardContent():
-                        with Column(gap=2):
-                            Heading(f"{i}. {g['name']}")
-                            Muted(g.get("developer") or g.get("primary_genre") or "")
-                            with Row(gap=2):
-                                deck = g.get("deck_status", "")
-                                if deck in ("verified", "playable"):
-                                    Badge(f"🎮 Deck {deck}", variant="outline")
-                                if hltb:
-                                    left = max(0, hltb - pt / 60) if pt > 0 else hltb
-                                    Badge(f"⏱ {left:.0f}h {'left' if pt > 0 else 'HLTB'}", variant="outline")
-                                if pct > 0:
-                                    Badge(f"⭐ {pct:.0f}%", variant="outline")
-                                if rs:
-                                    Badge(f"{rs:.0f}% positive", variant=_review_badge_variant(rs))
-                            Muted(f"Why: {'; '.join(reasons[:2])}")
-    return PrefabApp(view=view)
+                        Progress(value=int(rs), min=0, max=100, variant=_review_badge_variant(rs))
+                        with Row(gap=2, css_class="mt-2 flex-wrap"):
+                            deck = g.get("deck_status", "")
+                            if deck in ("verified", "playable"):
+                                Badge(label=f"🎮 Deck {deck}", variant="outline")
+                            if hltb:
+                                left = max(0, hltb - pt / 60) if pt > 0 else hltb
+                                Badge(label=f"⏱ {left:.0f}h {'left' if pt > 0 else 'HLTB'}", variant="outline")
+                            if pct > 0:
+                                Badge(label=f"⭐ {pct:.0f}%", variant="outline")
+                            if rs:
+                                Badge(label=f"{rs:.0f}% positive", variant=_review_badge_variant(rs))
+                        Muted(f"Why: {'; '.join(reasons[:2])}")
+
+    return PrefabApp(
+        view=view,
+        connect_domains=["cdn.cloudflare.steamstatic.com"],
+    )
 
 
 @mcp.tool(
