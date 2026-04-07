@@ -670,7 +670,7 @@ async def steam_get_recommendations(params: GetRecommendationsInput) -> "PrefabA
         if _HAS_PREFAB:
             try:
                 with Column(gap=4) as err_view:
-                    Heading("⚠﻿ Recommendations Error"
+                    Heading("⚠️ Recommendations Error")
                     Muted(f"{type(e).__name__}: {e}")
                     Muted(err_detail[:500])
                 return PrefabApp(view=err_view)
@@ -978,7 +978,7 @@ async def steam_get_stats(params: GetStatsInput) -> str:
                 AND review_score > 85 ORDER BY review_score DESC LIMIT 10
             """)
             if quick:
-                lines.append("\n### Quick Wins (under 5h, 85%+ reviews):"
+                lines.append("\n### Quick Wins (under 5h, 85%+ reviews):")
                 for g in quick:
                     lines.append(f"- **{g['name']}**  -  {g['hltb_main_hours']:.1f}h | {g['review_score']:.0f}% | Deck: {g['deck_status']}")
 
@@ -1101,7 +1101,7 @@ async def steam_run_query(params: RunSQLInput) -> str:
         if len(rows) <= 50 and len(rows[0]) <= 8:
             columns = list(rows[0].keys())
             lines = ["| " + " | ".join(columns) + " |"]
-            lines.append("| " + " | ".join(["---"] * len(columns)) + " |"]
+            lines.append("| " + " | ".join(["---"] * len(columns)) + " |")
             for row in rows:
                 vals = [str(row.get(c, "")) for c in columns]
                 lines.append("| " + " | ".join(vals) + " |")
