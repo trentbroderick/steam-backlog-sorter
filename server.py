@@ -20,16 +20,6 @@ import libsql_client
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from fastmcp import FastMCP
 
-# Prefab UI (rich UI responses for MCP clients that support it)
-try:
-    from prefab_ui.app import PrefabApp
-    from prefab_ui.components import (
-        Column, Row, Grid, Card, CardContent, Heading, Text,
-        Badge, Muted, Separator,
-    )
-    PREFAB_AVAILABLE = True
-except Exception:
-    PREFAB_AVAILABLE = False
 
 # =============================================================================
 # Configuration
@@ -403,62 +393,6 @@ async def steam_query_library(params: QueryLibraryInput) -> str:
         return f"Error querying library: {e}"
 
 
-def _review_badge_variant(score: Optional[float]) -> str:
-    if not score:
-        return "secondary"
-    if score >= 90:
-        return "success"
-    if score >= 75:
-        return "default"
-    if score >= 60:
-        return "warning"
-    return "destructive"
-
-
-def _build_recommendations_app(top, device_label: str, mood: Optional[str], hours: Optional[float]):
-    """Build a Prefab card-grid app for recommendations using the context-manager DSL."""
-    subtitle_bits = []
-    if mood:
-        subtitle_bits.append(f"mood: {mood}")
-    if hours:
-        subtitle_bits.append(f"{hours}h available")
-    subtitle = " • ".join(subtitle_bits) if subtitle_bits else "Personalized picks from your library"
-
-    with Column(gap=4) as view:
-        Heading(f"Recommended for {device_label}")
-        Muted(subtitle)
-        Separator()
-        with Grid(cols=3, gap=4):
-            for i, (score, g, reasons) in enumerate(top, 1):
-                pt = g.get("playtime_minutes") or 0
-                hltb = g.get("hltb_main_hours")
-                pct = g.get("completion_pct") or 0
-                rs = g.get("review_score")
-                app_id = g.get("app_id")
-                cover_url = f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/header.jpg" if app_id else None
-                with Card(css_class="overflow-hidden"):
-                    if cover_url:
-                        Text(f'<img src="{cover_url}" alt="{g["name"]}" style="width:100%;height:140px;object-fit:cover;" />', raw_html=True)
-                    with CardContent():
-                        with Column(gap=2):
-                            Heading(f"{i}. {g['name']}")
-                            Muted(g.get("developer") or g.get("primary_genre") or "")
-                            with Row(gap=2):
-                                if g.get("deck_status") and g["deck_status"] not in ("unknown", "unsupported"):
-                                    Badge(f"🎮 {g['deck_status']}", variant="outline")
-                                if hltb:
-                                    if pt > 0:
-                                        Badge(f"⏱ ~{max(0, hltb - pt / 60):.0f}h left", variant="outline")
-                                    else:
-                                        Badge(f"⏱ {hltb:.0f}h", variant="outline")
-                                if pct > 0:
-                                    Badge(f"⭐ {pct:.0f}%", variant="outline")
-                                if rs:
-                                    Badge(f"{rs:.0f}% positive", variant=_review_badge_variant(rs))
-                            Muted(f"Why: {'; '.join(reasons[:2])}")
-
-    return PrefabApp(view=view)
-
 
 @mcp.tool(
     name="steam_get_recommendations",
@@ -631,14 +565,7 @@ async def steam_get_recommendations(params: GetRecommendationsInput):
             DeviceEnum.ANY: "any device",
         }.get(params.device, "any device")
 
-        # Rich UI path (Prefab) — return PrefabApp directly, app=True on decorator handles rendering
-        if PREFAB_AVAILABLE:
-            try:
-                return _build_recommendations_app(top, device_label, params.mood, params.available_hours)
-            except Exception:
-                pass  # fall through to text
-
-        # Text fallback
+        # Build response
         lines = [f"## Recommended Games for {device_label}\n"]
         if params.mood:
             lines.append(f"*Mood: {params.mood}*\n")
