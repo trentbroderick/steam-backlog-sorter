@@ -20,6 +20,16 @@ import libsql_client
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from fastmcp import FastMCP
 
+try:
+    from prefab_ui.app import PrefabApp
+    from prefab_ui.components import (
+        Column, Row, Grid, Card, CardContent, Heading,
+        Badge, Muted, Separator,
+    )
+    _HAS_PREFAB = True
+except Exception:
+    _HAS_PREFAB = False
+
 
 # =============================================================================
 # Configuration
@@ -394,8 +404,53 @@ async def steam_query_library(params: QueryLibraryInput) -> str:
 
 
 
+def _review_badge_variant(score: Optional[float]) -> str:
+    if not score:       return "secondary"
+    if score >= 90:     return "success"
+    if score >= 75:     return "default"
+    if score >= 60:     return "warning"
+    return "destructive"
+
+
+def _build_recommendations_app(top, device_label: str, mood: Optional[str], hours: Optional[float]) -> "PrefabApp":
+    subtitle_bits = []
+    if mood:  subtitle_bits.append(f"mood: {mood}")
+    if hours: subtitle_bits.append(f"{hours}h available")
+    subtitle = " • ".join(subtitle_bits) if subtitle_bits else "Personalized picks from your library"
+
+    with Column(gap=4) as view:
+        Heading(f"🎮 Recommended for {device_label}")
+        Muted(subtitle)
+        Separator()
+        with Grid(cols=3, gap=4):
+            for i, (score, g, reasons) in enumerate(top, 1):
+                pt  = g.get("playtime_minutes") or 0
+                hltb = g.get("hltb_main_hours")
+                pct  = g.get("completion_pct") or 0
+                rs   = g.get("review_score")
+                with Card():
+                    with CardContent():
+                        with Column(gap=2):
+                            Heading(f"{i}. {g['name']}")
+                            Muted(g.get("developer") or g.get("primary_genre") or "")
+                            with Row(gap=2):
+                                deck = g.get("deck_status", "")
+                                if deck in ("verified", "playable"):
+                                    Badge(f"🎮 Deck {deck}", variant="outline")
+                                if hltb:
+                                    left = max(0, hltb - pt / 60) if pt > 0 else hltb
+                                    Badge(f"⏱ {left:.0f}h {'left' if pt > 0 else 'HLTB'}", variant="outline")
+                                if pct > 0:
+                                    Badge(f"⭐ {pct:.0f}%", variant="outline")
+                                if rs:
+                                    Badge(f"{rs:.0f}% positive", variant=_review_badge_variant(rs))
+                            Muted(f"Why: {'; '.join(reasons[:2])}")
+    return PrefabApp(view=view)
+
+
 @mcp.tool(
     name="steam_get_recommendations",
+    app=True,
     annotations={
         "title": "Get Game Recommendations",
         "readOnlyHint": True,
@@ -404,7 +459,7 @@ async def steam_query_library(params: QueryLibraryInput) -> str:
         "openWorldHint": False
     }
 )
-async def steam_get_recommendations(params: GetRecommendationsInput):
+async def steam_get_recommendations(params: GetRecommendationsInput) -> "PrefabApp":
     """Get personalized game recommendations from the library.
 
     Analyzes all 908 games considering: review scores, HLTB completion times,
@@ -565,7 +620,11 @@ async def steam_get_recommendations(params: GetRecommendationsInput):
             DeviceEnum.ANY: "any device",
         }.get(params.device, "any device")
 
-        # Build response
+        # Rich UI via MCP Apps + Prefab
+        if _HAS_PREFAB:
+            return _build_recommendations_app(top, device_label, params.mood, params.available_hours)
+
+        # Plain text fallback for non-Prefab environments
         lines = [f"## Recommended Games for {device_label}\n"]
         if params.mood:
             lines.append(f"*Mood: {params.mood}*\n")
