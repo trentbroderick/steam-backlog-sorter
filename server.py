@@ -590,8 +590,8 @@ async def steam_get_recommendations(params: GetRecommendationsInput) -> "PrefabA
                     "intense": ["action", "shooter", "fighting", "horror"],
                     "story": ["adventure", "rpg", "visual novel"],
                     "story-rich": ["adventure", "rpg", "visual novel"],
-                    "quick": [],  # handled by time
-                    "classic": [],  # handled by review age
+                    "quick": [],  // handled by time
+                    "classic": [],  // handled by review age
                     "cult": [],
                     "indie": ["indie"],
                     "new": [],
@@ -612,7 +612,7 @@ async def steam_get_recommendations(params: GetRecommendationsInput) -> "PrefabA
                     score += 15
                     reasons.append("Certified classic")
 
-            # Unplayed bonus — prioritize the untouched
+            // Unplayed bonus — prioritize the untouched
             if pt == 0:
                 score += 3
                 reasons.append("Unplayed — fresh experience")
@@ -622,7 +622,7 @@ async def steam_get_recommendations(params: GetRecommendationsInput) -> "PrefabA
 
             scored.append((score, g, reasons))
 
-        # Sort by score, take top N
+        // Sort by score, take top N
         scored.sort(key=lambda x: x[0], reverse=True)
         top = scored[:params.count]
 
@@ -633,11 +633,11 @@ async def steam_get_recommendations(params: GetRecommendationsInput) -> "PrefabA
             DeviceEnum.ANY: "any device",
         }.get(params.device, "any device")
 
-        # Rich UI via MCP Apps + Prefab
+        // Rich UI via MCP Apps + Prefab
         if _HAS_PREFAB:
             return _build_recommendations_app(top, device_label, params.mood, params.available_hours)
 
-        # Plain text fallback for non-Prefab environments
+        // Plain text fallback for non-Prefab environments
         lines = [f"## Recommended Games for {device_label}\n"]
         if params.mood:
             lines.append(f"*Mood: {params.mood}*\n")
@@ -665,7 +665,78 @@ async def steam_get_recommendations(params: GetRecommendationsInput) -> "PrefabA
         return "\n".join(lines)
 
     except Exception as e:
-        return f"Error generating recommendations: {e}"
+        import traceback as _tb
+        err_detail = _tb.format_exc()
+        if _HAS_PREFAB:
+            try:
+                with Column(gap=4) as err_view:
+                    Heading("⚠️ Recommendations Error"
+                    Muted(f"{type(e).__name__}: {e}")
+                    Muted(err_detail[:500])
+                return PrefabApp(view=err_view)
+            except Exception:
+                pass
+        return f"Error generating recommendations: {type(e).__name__}: {e}\n\n{err_detail}"
+
+
+@mcp.tool(
+    name="steam_debug",
+    annotations={"title": "Debug Steam MCP Server", "readOnlyHint": True}
+)
+async def steam_debug() -> str:
+    """Diagnostic tool — reports package versions, _HAS_PREFAB, and tests the Prefab pipeline.
+
+    Call this if steam_get_recommendations returns a 500 error.
+    Returns a plain-text report of what's working and what isn't.
+    """
+    import sys
+    lines = [f"Python: {sys.version}"]
+    lines.append(f"_HAS_PREFAB: {_HAS_PREFAB}")
+
+    # Package versions
+    try:
+        import importlib.metadata as _imeta
+        for pkg in ["fastmcp", "prefab-ui", "libsql-client", "pydantic", "howlongtobeatpy"]:
+            try:
+                lines.append(f"  {pkg}: {_imeta.version(pkg)}")
+            except Exception:
+                lines.append(f"  {pkg}: NOT FOUND")
+    except Exception as e:
+        lines.append(f"  version check failed: {e}")
+
+    # Prefab pipeline smoke-test
+    if _HAS_PREFAB:
+        try:
+            dummy_top = [(80.0, {
+                "name": "Test Game", "app_id": 12345, "playtime_minutes": 60,
+                "completion_pct": 50.0, "review_score": 90.0, "hltb_main_hours": 10.0,
+                "deck_status": "verified", "primary_genre": "Action",
+                "developer": "Test Dev", "review_desc": "Very Positive",
+            }, ["High score", "Deck verified"])]
+            app = _build_recommendations_app(dummy_top, "Steam Deck", None, None)
+            j = app.to_json()
+            import json as _json
+            lines.append(f"Prefab pipeline: OK ({len(_json.dumps(j))} bytes)")
+        except Exception as e:
+            import traceback as _tb
+            lines.append(f"Prefab pipeline FAILED: {type(e).__name__}: {e}")
+            lines.append(_tb.format_exc())
+    else:
+        lines.append("Prefab pipeline: SKIPPED (_HAS_PREFAB=False)")
+        try:
+            from prefab_ui.app import PrefabApp as _PA
+            lines.append("  (but prefab_ui.app imports fine now — stale flag?)")
+        except Exception as e2:
+            lines.append(f"  prefab_ui import error: {e2}")
+
+    # DB connectivity
+    try:
+        rows = await _query_turso("SELECT COUNT(*) as cnt FROM games")
+        lines.append(f"DB connection: OK ({rows[0]['cnt'] if rows else '?'} games)")
+    except Exception as e:
+        lines.append(f"DB connection FAILED: {type(e).__name__}: {e}")
+
+    return "\n".join(lines)
 
 
 @mcp.tool(
@@ -881,7 +952,7 @@ async def steam_get_stats(params: GetStatsInput) -> str:
             return "\n".join(lines)
 
         elif cat == "backlog":
-            # Backlog analysis
+            // Backlog analysis
             rows = await _query_turso("""
                 SELECT
                     SUM(CASE WHEN playtime_minutes = 0 AND hltb_main_hours IS NOT NULL THEN hltb_main_hours ELSE 0 END) as total_backlog_hours,
@@ -900,7 +971,7 @@ async def steam_get_stats(params: GetStatsInput) -> str:
                 f"- **At 4h/day:** ~{s['total_backlog_hours']/4/365:.1f} years to clear",
             ]
 
-            # Quick wins
+            // Quick wins
             quick = await _query_turso("""
                 SELECT name, hltb_main_hours, review_score, deck_status
                 FROM games WHERE playtime_minutes = 0 AND hltb_main_hours <= 5
@@ -1300,7 +1371,7 @@ async def steam_sync_recent() -> str:
                                 )
                         ach_updated.append(name)
 
-                        await asyncio.sleep(1)  # Rate limit
+                        await asyncio.sleep(1)  // Rate limit
 
                 if changes:
                     updated.append(f"**{name}**: {', '.join(changes)}")
@@ -1308,7 +1379,7 @@ async def steam_sync_recent() -> str:
             except Exception as e:
                 errors.append(f"{name}: {e}")
 
-        # Log the sync
+        // Log the sync
         await _execute_turso(
             "INSERT INTO sync_log (sync_time, sync_type, games_updated, status) VALUES (?, ?, ?, ?)",
             [datetime.now().isoformat(), "daily_recent", len(updated),
@@ -1350,7 +1421,7 @@ async def steam_sync_new_games() -> str:
         if not STEAM_API_KEY:
             return "Error: STEAM_API_KEY not configured."
 
-        # Get full owned games list
+        // Get full owned games list
         data = await _steam_api_get(
             f"{STEAM_API_BASE}/IPlayerService/GetOwnedGames/v0001/",
             {"key": STEAM_API_KEY, "steamid": STEAM_ID,
@@ -1361,7 +1432,7 @@ async def steam_sync_new_games() -> str:
 
         steam_games = data["response"].get("games", [])
 
-        # Get existing app_ids from DB
+        // Get existing app_ids from DB
         db_rows = await _query_turso("SELECT app_id FROM games")
         existing_ids = {r["app_id"] for r in db_rows}
 
@@ -1383,11 +1454,11 @@ async def steam_sync_new_games() -> str:
             playtime = g.get("playtime_forever", 0)
 
             try:
-                # Fetch store data for enrichment
+                // Fetch store data for enrichment
                 store = await _fetch_store_data(app_id)
-                await asyncio.sleep(1.5)  # Rate limit
+                await asyncio.sleep(1.5)  // Rate limit
 
-                # Extract store metadata
+                // Extract store metadata
                 genres = ""
                 primary_genre = "Unknown"
                 developer = ""
@@ -1409,25 +1480,25 @@ async def steam_sync_new_games() -> str:
                     mc = store.get("metacritic", {})
                     metacritic = mc.get("score") if mc else None
 
-                # Fetch reviews
+                // Fetch reviews
                 review_score, review_count, review_desc = await _fetch_reviews(app_id)
                 await asyncio.sleep(0.5)
 
-                # Fetch Deck status
+                // Fetch Deck status
                 deck_status = await _fetch_deck_status(app_id)
 
-                # Fetch HLTB
+                // Fetch HLTB
                 hltb_main, hltb_extra, hltb_comp = await _fetch_hltb(name)
 
-                # Fetch achievements
+                // Fetch achievements
                 achs, ach_unlocked, ach_total = await _fetch_player_achievements(app_id)
                 pct = (ach_unlocked / ach_total * 100) if ach_total > 0 else 0
                 await asyncio.sleep(1)
 
-                # Determine status
+                // Determine status
                 status = "in_progress" if playtime > 0 else "unplayed"
 
-                # Insert game
+                // Insert game
                 await _execute_turso(
                     """INSERT INTO games (app_id, name, playtime_minutes, last_played,
                        achievements_total, achievements_unlocked, completion_pct,
@@ -1444,7 +1515,7 @@ async def steam_sync_new_games() -> str:
                      status, datetime.now().isoformat()]
                 )
 
-                # Insert achievements
+                // Insert achievements
                 for a in achs:
                     await _execute_turso(
                         """INSERT OR IGNORE INTO achievements (app_id, api_name, display_name,
@@ -1461,7 +1532,7 @@ async def steam_sync_new_games() -> str:
             except Exception as e:
                 errors.append(f"{name}: {e}")
 
-        # Log
+        // Log
         await _execute_turso(
             "INSERT INTO sync_log (sync_time, sync_type, games_added, status) VALUES (?, ?, ?, ?)",
             [datetime.now().isoformat(), "weekly_new_games", len(added),
@@ -1493,7 +1564,7 @@ async def steam_sync_refresh_metadata(params: SyncRefreshInput) -> str:
     increasing offset until all games are processed. Each call handles ~75 games.
     """
     try:
-        # Get batch of games
+        // Get batch of games
         games = await _query_turso(
             "SELECT app_id, name, review_score, deck_status, all_genres FROM games ORDER BY app_id LIMIT ? OFFSET ?",
             [params.batch_size, params.offset]
@@ -1514,9 +1585,9 @@ async def steam_sync_refresh_metadata(params: SyncRefreshInput) -> str:
             changes = []
 
             try:
-                # Refresh reviews
+                // Refresh reviews
                 new_score, new_count, new_desc = await _fetch_reviews(app_id)
-                await asyncio.sleep(1.5)  # Rate limit for store API
+                await asyncio.sleep(1.5)  // Rate limit for store API
 
                 if new_score is not None:
                     old_score = g.get("review_score")
@@ -1528,7 +1599,7 @@ async def steam_sync_refresh_metadata(params: SyncRefreshInput) -> str:
                         [new_score, new_count, new_desc, datetime.now().isoformat(), app_id]
                     )
 
-                # Refresh Deck status
+                // Refresh Deck status
                 new_deck = await _fetch_deck_status(app_id)
                 if new_deck != "unknown":
                     old_deck = g.get("deck_status", "unknown")
@@ -1539,7 +1610,7 @@ async def steam_sync_refresh_metadata(params: SyncRefreshInput) -> str:
                         [new_deck, datetime.now().isoformat(), app_id]
                     )
 
-                # Refresh genres from store
+                // Refresh genres from store
                 store = await _fetch_store_data(app_id)
                 await asyncio.sleep(1)
                 if store:
@@ -1555,7 +1626,7 @@ async def steam_sync_refresh_metadata(params: SyncRefreshInput) -> str:
                             [new_primary, new_genres, datetime.now().isoformat(), app_id]
                         )
 
-                    # Also refresh metacritic if available
+                    // Also refresh metacritic if available
                     mc = store.get("metacritic", {})
                     if mc and mc.get("score"):
                         await _execute_turso(
@@ -1569,7 +1640,7 @@ async def steam_sync_refresh_metadata(params: SyncRefreshInput) -> str:
             except Exception as e:
                 errors.append(f"{name}: {e}")
 
-        # Log
+        // Log
         await _execute_turso(
             "INSERT INTO sync_log (sync_time, sync_type, games_updated, status) VALUES (?, ?, ?, ?)",
             [datetime.now().isoformat(), f"biweekly_metadata_offset_{params.offset}",
