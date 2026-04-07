@@ -458,7 +458,6 @@ def _build_recommendations_app(top, device_label: str, mood: Optional[str], hour
 
 @mcp.tool(
     name="steam_get_recommendations",
-    app=True,
     annotations={
         "title": "Get Game Recommendations",
         "readOnlyHint": True,
@@ -467,7 +466,7 @@ def _build_recommendations_app(top, device_label: str, mood: Optional[str], hour
         "openWorldHint": False
     }
 )
-async def steam_get_recommendations(params: GetRecommendationsInput):
+async def steam_get_recommendations(params: GetRecommendationsInput) -> str:
     """Get personalized game recommendations from the library.
 
     Analyzes all 908 games considering: review scores, HLTB completion times,
@@ -628,9 +627,13 @@ async def steam_get_recommendations(params: GetRecommendationsInput):
             DeviceEnum.ANY: "any device",
         }.get(params.device, "any device")
 
-        # Rich UI path (Prefab)
+        # Rich UI path (Prefab) — serialize to string so FastMCP handles it uniformly
         if PREFAB_AVAILABLE:
-            return _build_recommendations_app(top, device_label, params.mood, params.available_hours)
+            try:
+                app = _build_recommendations_app(top, device_label, params.mood, params.available_hours)
+                return app.render() if hasattr(app, 'render') else str(app)
+            except Exception:
+                pass  # fall through to text
 
         # Text fallback
         lines = [f"## Recommended Games for {device_label}\n"]
