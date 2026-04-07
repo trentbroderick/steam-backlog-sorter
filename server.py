@@ -462,7 +462,6 @@ def _build_recommendations_app(top, device_label: str, mood: Optional[str], hour
 
 @mcp.tool(
     name="steam_get_recommendations",
-    app=True,
     annotations={
         "title": "Get Game Recommendations",
         "readOnlyHint": True,
@@ -471,7 +470,7 @@ def _build_recommendations_app(top, device_label: str, mood: Optional[str], hour
         "openWorldHint": False
     }
 )
-async def steam_get_recommendations(params: GetRecommendationsInput) -> str:
+async def steam_get_recommendations(params: GetRecommendationsInput):
     """Get personalized game recommendations from the library.
 
     Analyzes all 908 games considering: review scores, HLTB completion times,
