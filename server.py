@@ -20,6 +20,17 @@ import libsql_client
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from fastmcp import FastMCP
 
+# Prefab UI (rich UI responses for MCP clients that support it)
+try:
+    from prefab_ui.app import PrefabApp
+    from prefab_ui.components import (
+        Column, Row, Grid, Card, CardContent, Heading, Text,
+        Badge, Muted, Separator, ForEach,
+    )
+    PREFAB_AVAILABLE = True
+except Exception:
+    PREFAB_AVAILABLE = False
+
 # =============================================================================
 # Configuration
 # =============================================================================
@@ -392,8 +403,77 @@ async def steam_query_library(params: QueryLibraryInput) -> str:
         return f"Error querying library: {e}"
 
 
+def _review_badge_variant(score: Optional[float]) -> str:
+    if not score:
+        return "secondary"
+    if score >= 90:
+        return "success"
+    if score >= 75:
+        return "default"
+    if score >= 60:
+        return "warning"
+    return "destructive"
+
+
+def _build_recommendations_app(top, device_label: str, mood: Optional[str], hours: Optional[float]):
+    """Build a Prefab card-grid app for recommendations."""
+    header_bits = [f"Recommended for {device_label}"]
+    if mood:
+        header_bits.append(f"mood: {mood}")
+    if hours:
+        header_bits.append(f"{hours}h available")
+    subtitle = " • ".join(header_bits[1:]) if len(header_bits) > 1 else "Personalized picks from your library"
+
+    cards = []
+    for i, (score, g, reasons) in enumerate(top, 1):
+        app_id = g.get("app_id")
+        cover = f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/header.jpg" if app_id else None
+        pt = g.get("playtime_minutes") or 0
+        hltb = g.get("hltb_main_hours")
+        pct = g.get("completion_pct") or 0
+        rs = g.get("review_score")
+
+        meta_badges = []
+        if g.get("deck_status") and g["deck_status"] != "unknown":
+            meta_badges.append(Badge(f"Deck: {g['deck_status']}", variant="outline"))
+        if hltb:
+            remaining = max(0, hltb - pt / 60) if pt > 0 else hltb
+            meta_badges.append(Badge(f"~{remaining:.0f}h left" if pt > 0 else f"{hltb:.0f}h HLTB", variant="outline"))
+        if pct > 0:
+            meta_badges.append(Badge(f"{pct:.0f}% done", variant="outline"))
+        if rs:
+            meta_badges.append(Badge(f"{g.get('review_desc') or 'Reviews'} {rs:.0f}%", variant=_review_badge_variant(rs)))
+
+        card_children = []
+        if cover:
+            card_children.append(
+                Text(f'<img src="{cover}" alt="{g["name"]}" style="width:100%;border-radius:6px 6px 0 0;" />', raw=True)
+            )
+        card_children.append(
+            CardContent(
+                Heading(f"{i}. {g['name']}", level=3),
+                Muted(g.get("developer") or g.get("primary_genre") or ""),
+                Row(*meta_badges, gap=2, wrap=True),
+                Separator(),
+                Text(f"**Why:** {'; '.join(reasons[:3])}"),
+            )
+        )
+        cards.append(Card(*card_children))
+
+    return PrefabApp(
+        Column(
+            Heading(header_bits[0], level=1),
+            Muted(subtitle),
+            Separator(),
+            Grid(*cards, cols=3, gap=4),
+            gap=4,
+        )
+    )
+
+
 @mcp.tool(
     name="steam_get_recommendations",
+    app=True,
     annotations={
         "title": "Get Game Recommendations",
         "readOnlyHint": True,
@@ -402,7 +482,7 @@ async def steam_query_library(params: QueryLibraryInput) -> str:
         "openWorldHint": False
     }
 )
-async def steam_get_recommendations(params: GetRecommendationsInput) -> str:
+async def steam_get_recommendations(params: GetRecommendationsInput):
     """Get personalized game recommendations from the library.
 
     Analyzes all 908 games considering: review scores, HLTB completion times,
@@ -563,6 +643,11 @@ async def steam_get_recommendations(params: GetRecommendationsInput) -> str:
             DeviceEnum.ANY: "any device",
         }.get(params.device, "any device")
 
+        # Rich UI path (Prefab)
+        if PREFAB_AVAILABLE:
+            return _build_recommendations_app(top, device_label, params.mood, params.available_hours)
+
+        # Text fallback
         lines = [f"## Recommended Games for {device_label}\n"]
         if params.mood:
             lines.append(f"*Mood: {params.mood}*\n")
