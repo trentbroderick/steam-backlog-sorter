@@ -24,8 +24,8 @@ from fastmcp import FastMCP
 try:
     from prefab_ui.app import PrefabApp
     from prefab_ui.components import (
-        Column, Row, Grid, Card, CardContent, Heading, Text,
-        Badge, Muted, Separator, ForEach,
+        Column, Row, Grid, Card, CardContent, Heading,
+        Badge, Muted, Separator,
     )
     PREFAB_AVAILABLE = True
 except Exception:
@@ -416,59 +416,44 @@ def _review_badge_variant(score: Optional[float]) -> str:
 
 
 def _build_recommendations_app(top, device_label: str, mood: Optional[str], hours: Optional[float]):
-    """Build a Prefab card-grid app for recommendations."""
-    header_bits = [f"Recommended for {device_label}"]
+    """Build a Prefab card-grid app for recommendations using the context-manager DSL."""
+    subtitle_bits = []
     if mood:
-        header_bits.append(f"mood: {mood}")
+        subtitle_bits.append(f"mood: {mood}")
     if hours:
-        header_bits.append(f"{hours}h available")
-    subtitle = " • ".join(header_bits[1:]) if len(header_bits) > 1 else "Personalized picks from your library"
+        subtitle_bits.append(f"{hours}h available")
+    subtitle = " • ".join(subtitle_bits) if subtitle_bits else "Personalized picks from your library"
 
-    cards = []
-    for i, (score, g, reasons) in enumerate(top, 1):
-        app_id = g.get("app_id")
-        cover = f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/header.jpg" if app_id else None
-        pt = g.get("playtime_minutes") or 0
-        hltb = g.get("hltb_main_hours")
-        pct = g.get("completion_pct") or 0
-        rs = g.get("review_score")
+    with Column(gap=4, css_class="p-6") as view:
+        Heading(f"Recommended for {device_label}", level=1)
+        Muted(subtitle)
+        Separator()
+        with Grid(cols=3, gap=4):
+            for i, (score, g, reasons) in enumerate(top, 1):
+                pt = g.get("playtime_minutes") or 0
+                hltb = g.get("hltb_main_hours")
+                pct = g.get("completion_pct") or 0
+                rs = g.get("review_score")
+                with Card():
+                    with CardContent():
+                        with Column(gap=2):
+                            Heading(f"{i}. {g['name']}", level=3)
+                            Muted(g.get("developer") or g.get("primary_genre") or "")
+                            with Row(gap=2):
+                                if g.get("deck_status") and g["deck_status"] != "unknown":
+                                    Badge(f"Deck: {g['deck_status']}", variant="outline")
+                                if hltb:
+                                    if pt > 0:
+                                        Badge(f"~{max(0, hltb - pt / 60):.0f}h left", variant="outline")
+                                    else:
+                                        Badge(f"{hltb:.0f}h HLTB", variant="outline")
+                                if pct > 0:
+                                    Badge(f"{pct:.0f}% done", variant="outline")
+                                if rs:
+                                    Badge(f"{rs:.0f}%", variant=_review_badge_variant(rs))
+                            Muted(f"Why: {'; '.join(reasons[:3])}")
 
-        meta_badges = []
-        if g.get("deck_status") and g["deck_status"] != "unknown":
-            meta_badges.append(Badge(f"Deck: {g['deck_status']}", variant="outline"))
-        if hltb:
-            remaining = max(0, hltb - pt / 60) if pt > 0 else hltb
-            meta_badges.append(Badge(f"~{remaining:.0f}h left" if pt > 0 else f"{hltb:.0f}h HLTB", variant="outline"))
-        if pct > 0:
-            meta_badges.append(Badge(f"{pct:.0f}% done", variant="outline"))
-        if rs:
-            meta_badges.append(Badge(f"{g.get('review_desc') or 'Reviews'} {rs:.0f}%", variant=_review_badge_variant(rs)))
-
-        card_children = []
-        if cover:
-            card_children.append(
-                Text(f'<img src="{cover}" alt="{g["name"]}" style="width:100%;border-radius:6px 6px 0 0;" />', raw=True)
-            )
-        card_children.append(
-            CardContent(
-                Heading(f"{i}. {g['name']}", level=3),
-                Muted(g.get("developer") or g.get("primary_genre") or ""),
-                Row(*meta_badges, gap=2, wrap=True),
-                Separator(),
-                Text(f"**Why:** {'; '.join(reasons[:3])}"),
-            )
-        )
-        cards.append(Card(*card_children))
-
-    return PrefabApp(
-        Column(
-            Heading(header_bits[0], level=1),
-            Muted(subtitle),
-            Separator(),
-            Grid(*cards, cols=3, gap=4),
-            gap=4,
-        )
-    )
+    return PrefabApp(view=view)
 
 
 @mcp.tool(
