@@ -424,8 +424,8 @@ def _build_recommendations_app(top, device_label: str, mood: Optional[str], hour
         subtitle_bits.append(f"{hours}h available")
     subtitle = " • ".join(subtitle_bits) if subtitle_bits else "Personalized picks from your library"
 
-    with Column(gap=4, css_class="p-6") as view:
-        Heading(f"Recommended for {device_label}", level=1)
+    with Column(gap=4) as view:
+        Heading(f"Recommended for {device_label}")
         Muted(subtitle)
         Separator()
         with Grid(cols=3, gap=4):
@@ -437,7 +437,7 @@ def _build_recommendations_app(top, device_label: str, mood: Optional[str], hour
                 with Card():
                     with CardContent():
                         with Column(gap=2):
-                            Heading(f"{i}. {g['name']}", level=3)
+                            Heading(f"{i}. {g['name']}")
                             Muted(g.get("developer") or g.get("primary_genre") or "")
                             with Row(gap=2):
                                 if g.get("deck_status") and g["deck_status"] != "unknown":
