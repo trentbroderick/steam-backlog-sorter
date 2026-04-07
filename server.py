@@ -24,7 +24,7 @@ from fastmcp import FastMCP
 try:
     from prefab_ui.app import PrefabApp
     from prefab_ui.components import (
-        Column, Row, Grid, Card, CardContent, Heading,
+        Column, Row, Grid, Card, CardContent, Heading, Text,
         Badge, Muted, Separator,
     )
     PREFAB_AVAILABLE = True
@@ -434,30 +434,35 @@ def _build_recommendations_app(top, device_label: str, mood: Optional[str], hour
                 hltb = g.get("hltb_main_hours")
                 pct = g.get("completion_pct") or 0
                 rs = g.get("review_score")
-                with Card():
+                app_id = g.get("app_id")
+                cover_url = f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/header.jpg" if app_id else None
+                with Card(css_class="overflow-hidden"):
+                    if cover_url:
+                        Text(f'<img src="{cover_url}" alt="{g["name"]}" style="width:100%;height:140px;object-fit:cover;" />', raw_html=True)
                     with CardContent():
                         with Column(gap=2):
                             Heading(f"{i}. {g['name']}")
                             Muted(g.get("developer") or g.get("primary_genre") or "")
                             with Row(gap=2):
-                                if g.get("deck_status") and g["deck_status"] != "unknown":
-                                    Badge(f"Deck: {g['deck_status']}", variant="outline")
+                                if g.get("deck_status") and g["deck_status"] not in ("unknown", "unsupported"):
+                                    Badge(f"🎮 {g['deck_status']}", variant="outline")
                                 if hltb:
                                     if pt > 0:
-                                        Badge(f"~{max(0, hltb - pt / 60):.0f}h left", variant="outline")
+                                        Badge(f"⏱ ~{max(0, hltb - pt / 60):.0f}h left", variant="outline")
                                     else:
-                                        Badge(f"{hltb:.0f}h HLTB", variant="outline")
+                                        Badge(f"⏱ {hltb:.0f}h", variant="outline")
                                 if pct > 0:
-                                    Badge(f"{pct:.0f}% done", variant="outline")
+                                    Badge(f"⭐ {pct:.0f}%", variant="outline")
                                 if rs:
-                                    Badge(f"{rs:.0f}%", variant=_review_badge_variant(rs))
-                            Muted(f"Why: {'; '.join(reasons[:3])}")
+                                    Badge(f"{rs:.0f}% positive", variant=_review_badge_variant(rs))
+                            Muted(f"Why: {'; '.join(reasons[:2])}")
 
     return PrefabApp(view=view)
 
 
 @mcp.tool(
     name="steam_get_recommendations",
+    app=True,
     annotations={
         "title": "Get Game Recommendations",
         "readOnlyHint": True,
@@ -627,11 +632,10 @@ async def steam_get_recommendations(params: GetRecommendationsInput) -> str:
             DeviceEnum.ANY: "any device",
         }.get(params.device, "any device")
 
-        # Rich UI path (Prefab) — serialize to string so FastMCP handles it uniformly
+        # Rich UI path (Prefab) — return PrefabApp directly, app=True on decorator handles rendering
         if PREFAB_AVAILABLE:
             try:
-                app = _build_recommendations_app(top, device_label, params.mood, params.available_hours)
-                return app.render() if hasattr(app, 'render') else str(app)
+                return _build_recommendations_app(top, device_label, params.mood, params.available_hours)
             except Exception:
                 pass  # fall through to text
 
