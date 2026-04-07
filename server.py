@@ -103,7 +103,7 @@ def _format_game_summary(game: dict) -> str:
     genre = game.get("primary_genre", "")
     status = game.get("status", "")
 
-    return (f"**{name}** — {playtime} played | {pct:.0f}% achievements | "
+    return (f"**{name}**  -  {playtime} played | {pct:.0f}% achievements | "
             f"Reviews: {review_str} | HLTB: {hltb_str} | Deck: {deck} | {genre} | Status: {status}")
 
 
@@ -304,7 +304,7 @@ async def steam_query_library(params: QueryLibraryInput) -> str:
 
     Filter by genre, device compatibility, play status, review scores, HLTB times,
     achievement completion, and more. Supports sorting and pagination.
-    Scans all 908 games in the database — never a random subset.
+    Scans all 908 games in the database  -  never a random subset.
 
     Use this for questions like:
     - "What unplayed RPGs do I have?"
@@ -326,7 +326,7 @@ async def steam_query_library(params: QueryLibraryInput) -> str:
             elif params.device == DeviceEnum.LIVING_ROOM:
                 # Controller-friendly: Deck verified/playable is a good proxy
                 conditions.append("deck_status IN ('verified', 'playable')")
-            # Office PC can play anything — no filter needed
+            # Office PC can play anything  -  no filter needed
 
         if params.status:
             conditions.append("status = ?")
@@ -504,7 +504,7 @@ async def steam_get_recommendations(params: GetRecommendationsInput) -> "PrefabA
 
         where = "WHERE " + " AND ".join(conditions) if conditions else ""
 
-        # Pull candidates — we get a generous pool to score from
+        # Pull candidates  -  we get a generous pool to score from
         sql = f"""SELECT name, app_id, playtime_minutes, completion_pct, review_score,
                          review_count, review_desc, hltb_main_hours, hltb_extra_hours,
                          deck_status, primary_genre, all_genres, status, metacritic,
@@ -550,7 +550,7 @@ async def steam_get_recommendations(params: GetRecommendationsInput) -> "PrefabA
             elif mc and mc >= 80:
                 score += 5
 
-            # Completion proximity bonus (0-25 points) — heavily reward close-to-done
+            # Completion proximity bonus (0-25 points)  -  heavily reward close-to-done
             pct = g.get("completion_pct") or 0
             pt = g.get("playtime_minutes") or 0
             if pct >= 80 and pt > 0:
@@ -590,8 +590,8 @@ async def steam_get_recommendations(params: GetRecommendationsInput) -> "PrefabA
                     "intense": ["action", "shooter", "fighting", "horror"],
                     "story": ["adventure", "rpg", "visual novel"],
                     "story-rich": ["adventure", "rpg", "visual novel"],
-                    "quick": [],  // handled by time
-                    "classic": [],  // handled by review age
+                    "quick": [],  # handled by time
+                    "classic": [],  # handled by review age
                     "cult": [],
                     "indie": ["indie"],
                     "new": [],
@@ -612,17 +612,17 @@ async def steam_get_recommendations(params: GetRecommendationsInput) -> "PrefabA
                     score += 15
                     reasons.append("Certified classic")
 
-            // Unplayed bonus — prioritize the untouched
+            # Unplayed bonus  -  prioritize the untouched
             if pt == 0:
                 score += 3
-                reasons.append("Unplayed — fresh experience")
+                reasons.append("Unplayed  -  fresh experience")
 
             if not reasons:
-                reasons.append(f"{g.get('primary_genre', 'Game')} — {g.get('review_desc', '')}")
+                reasons.append(f"{g.get('primary_genre', 'Game')}  -  {g.get('review_desc', '')}")
 
             scored.append((score, g, reasons))
 
-        // Sort by score, take top N
+        # Sort by score, take top N
         scored.sort(key=lambda x: x[0], reverse=True)
         top = scored[:params.count]
 
@@ -633,11 +633,11 @@ async def steam_get_recommendations(params: GetRecommendationsInput) -> "PrefabA
             DeviceEnum.ANY: "any device",
         }.get(params.device, "any device")
 
-        // Rich UI via MCP Apps + Prefab
+        # Rich UI via MCP Apps + Prefab
         if _HAS_PREFAB:
             return _build_recommendations_app(top, device_label, params.mood, params.available_hours)
 
-        // Plain text fallback for non-Prefab environments
+        # Plain text fallback for non-Prefab environments
         lines = [f"## Recommended Games for {device_label}\n"]
         if params.mood:
             lines.append(f"*Mood: {params.mood}*\n")
@@ -670,7 +670,7 @@ async def steam_get_recommendations(params: GetRecommendationsInput) -> "PrefabA
         if _HAS_PREFAB:
             try:
                 with Column(gap=4) as err_view:
-                    Heading("⚠️ Recommendations Error"
+                    Heading("⚠﻿ Recommendations Error"
                     Muted(f"{type(e).__name__}: {e}")
                     Muted(err_detail[:500])
                 return PrefabApp(view=err_view)
@@ -684,7 +684,7 @@ async def steam_get_recommendations(params: GetRecommendationsInput) -> "PrefabA
     annotations={"title": "Debug Steam MCP Server", "readOnlyHint": True}
 )
 async def steam_debug() -> str:
-    """Diagnostic tool — reports package versions, _HAS_PREFAB, and tests the Prefab pipeline.
+    """Diagnostic tool  -  reports package versions, _HAS_PREFAB, and tests the Prefab pipeline.
 
     Call this if steam_get_recommendations returns a 500 error.
     Returns a plain-text report of what's working and what isn't.
@@ -725,7 +725,7 @@ async def steam_debug() -> str:
         lines.append("Prefab pipeline: SKIPPED (_HAS_PREFAB=False)")
         try:
             from prefab_ui.app import PrefabApp as _PA
-            lines.append("  (but prefab_ui.app imports fine now — stale flag?)")
+            lines.append("  (but prefab_ui.app imports fine now  -  stale flag?)")
         except Exception as e2:
             lines.append(f"  prefab_ui import error: {e2}")
 
@@ -823,7 +823,7 @@ async def steam_get_game_detail(params: GetGameDetailInput) -> str:
                     # Show easiest locked achievements (highest global %)
                     lines.append("### Easiest Remaining:")
                     for a in sorted(locked, key=lambda x: x.get("global_pct", 0), reverse=True)[:10]:
-                        desc = f" — {a['description']}" if a.get("description") else ""
+                        desc = f"  -  {a['description']}" if a.get("description") else ""
                         lines.append(f"- {a.get('display_name', a.get('api_name', '?'))}{desc} ({a.get('global_pct', 0):.1f}% of players)")
                     lines.append("")
 
@@ -922,7 +922,7 @@ async def steam_get_stats(params: GetStatsInput) -> str:
             for r in rows:
                 remaining = r["achievements_total"] - r["achievements_unlocked"]
                 lines.append(f"- **{r['name']}:** {r['achievements_unlocked']}/{r['achievements_total']} "
-                             f"({r['completion_pct']:.0f}%) — {remaining} left — {r['hours']:.1f}h played")
+                             f"({r['completion_pct']:.0f}%)  -  {remaining} left  -  {r['hours']:.1f}h played")
             return "\n".join(lines)
 
         elif cat == "deck":
@@ -947,12 +947,12 @@ async def steam_get_stats(params: GetStatsInput) -> str:
                 lines.append("\n### Top Unplayed Deck-Verified Games:")
                 for g in top_deck:
                     hltb = f"{g['hltb_main_hours']:.0f}h" if g.get("hltb_main_hours") else "?"
-                    lines.append(f"- **{g['name']}** — {g['review_score']:.0f}% | HLTB: {hltb} | {g['primary_genre']}")
+                    lines.append(f"- **{g['name']}**  -  {g['review_score']:.0f}% | HLTB: {hltb} | {g['primary_genre']}")
 
             return "\n".join(lines)
 
         elif cat == "backlog":
-            // Backlog analysis
+            # Backlog analysis
             rows = await _query_turso("""
                 SELECT
                     SUM(CASE WHEN playtime_minutes = 0 AND hltb_main_hours IS NOT NULL THEN hltb_main_hours ELSE 0 END) as total_backlog_hours,
@@ -971,16 +971,16 @@ async def steam_get_stats(params: GetStatsInput) -> str:
                 f"- **At 4h/day:** ~{s['total_backlog_hours']/4/365:.1f} years to clear",
             ]
 
-            // Quick wins
+            # Quick wins
             quick = await _query_turso("""
                 SELECT name, hltb_main_hours, review_score, deck_status
                 FROM games WHERE playtime_minutes = 0 AND hltb_main_hours <= 5
                 AND review_score > 85 ORDER BY review_score DESC LIMIT 10
             """)
             if quick:
-                lines.append("\n### Quick Wins (under 5h, 85%+ reviews):")
+                lines.append("\n### Quick Wins (under 5h, 85%+ reviews):"
                 for g in quick:
-                    lines.append(f"- **{g['name']}** — {g['hltb_main_hours']:.1f}h | {g['review_score']:.0f}% | Deck: {g['deck_status']}")
+                    lines.append(f"- **{g['name']}**  -  {g['hltb_main_hours']:.1f}h | {g['review_score']:.0f}% | Deck: {g['deck_status']}")
 
             return "\n".join(lines)
 
@@ -1004,7 +1004,7 @@ async def steam_get_stats(params: GetStatsInput) -> str:
             """)
             lines = ["# Recently Played\n"]
             for r in rows:
-                lines.append(f"- **{r['name']}** — {r['last_played_date']} | "
+                lines.append(f"- **{r['name']}**  -  {r['last_played_date']} | "
                              f"{r['hours']:.1f}h | {r['completion_pct']:.0f}% | {r['primary_genre']}")
             return "\n".join(lines)
 
@@ -1101,7 +1101,7 @@ async def steam_run_query(params: RunSQLInput) -> str:
         if len(rows) <= 50 and len(rows[0]) <= 8:
             columns = list(rows[0].keys())
             lines = ["| " + " | ".join(columns) + " |"]
-            lines.append("| " + " | ".join(["---"] * len(columns)) + " |")
+            lines.append("| " + " | ".join(["---"] * len(columns)) + " |"]
             for row in rows:
                 vals = [str(row.get(c, "")) for c in columns]
                 lines.append("| " + " | ".join(vals) + " |")
@@ -1321,7 +1321,7 @@ async def steam_sync_recent() -> str:
                 )
 
                 if not db_rows:
-                    # Game not in DB yet — skip (weekly sync handles new games)
+                    # Game not in DB yet  -  skip (weekly sync handles new games)
                     continue
 
                 old = db_rows[0]
@@ -1371,7 +1371,7 @@ async def steam_sync_recent() -> str:
                                 )
                         ach_updated.append(name)
 
-                        await asyncio.sleep(1)  // Rate limit
+                        await asyncio.sleep(1)  # Rate limit
 
                 if changes:
                     updated.append(f"**{name}**: {', '.join(changes)}")
@@ -1379,7 +1379,7 @@ async def steam_sync_recent() -> str:
             except Exception as e:
                 errors.append(f"{name}: {e}")
 
-        // Log the sync
+        # Log the sync
         await _execute_turso(
             "INSERT INTO sync_log (sync_time, sync_type, games_updated, status) VALUES (?, ?, ?, ?)",
             [datetime.now().isoformat(), "daily_recent", len(updated),
@@ -1393,7 +1393,7 @@ async def steam_sync_recent() -> str:
             for u in updated:
                 lines.append(f"- {u}")
         else:
-            lines.append("No changes detected — database is up to date.")
+            lines.append("No changes detected  -  database is up to date.")
 
         if ach_updated:
             lines.append(f"\n**Achievement progress updated for:** {', '.join(ach_updated)}")
@@ -1421,7 +1421,7 @@ async def steam_sync_new_games() -> str:
         if not STEAM_API_KEY:
             return "Error: STEAM_API_KEY not configured."
 
-        // Get full owned games list
+        # Get full owned games list
         data = await _steam_api_get(
             f"{STEAM_API_BASE}/IPlayerService/GetOwnedGames/v0001/",
             {"key": STEAM_API_KEY, "steamid": STEAM_ID,
@@ -1432,7 +1432,7 @@ async def steam_sync_new_games() -> str:
 
         steam_games = data["response"].get("games", [])
 
-        // Get existing app_ids from DB
+        # Get existing app_ids from DB
         db_rows = await _query_turso("SELECT app_id FROM games")
         existing_ids = {r["app_id"] for r in db_rows}
 
@@ -1454,11 +1454,11 @@ async def steam_sync_new_games() -> str:
             playtime = g.get("playtime_forever", 0)
 
             try:
-                // Fetch store data for enrichment
+                # Fetch store data for enrichment
                 store = await _fetch_store_data(app_id)
-                await asyncio.sleep(1.5)  // Rate limit
+                await asyncio.sleep(1.5)  # Rate limit
 
-                // Extract store metadata
+                # Extract store metadata
                 genres = ""
                 primary_genre = "Unknown"
                 developer = ""
@@ -1480,25 +1480,25 @@ async def steam_sync_new_games() -> str:
                     mc = store.get("metacritic", {})
                     metacritic = mc.get("score") if mc else None
 
-                // Fetch reviews
+                # Fetch reviews
                 review_score, review_count, review_desc = await _fetch_reviews(app_id)
                 await asyncio.sleep(0.5)
 
-                // Fetch Deck status
+                # Fetch Deck status
                 deck_status = await _fetch_deck_status(app_id)
 
-                // Fetch HLTB
+                # Fetch HLTB
                 hltb_main, hltb_extra, hltb_comp = await _fetch_hltb(name)
 
-                // Fetch achievements
+                # Fetch achievements
                 achs, ach_unlocked, ach_total = await _fetch_player_achievements(app_id)
                 pct = (ach_unlocked / ach_total * 100) if ach_total > 0 else 0
                 await asyncio.sleep(1)
 
-                // Determine status
+                # Determine status
                 status = "in_progress" if playtime > 0 else "unplayed"
 
-                // Insert game
+                # Insert game
                 await _execute_turso(
                     """INSERT INTO games (app_id, name, playtime_minutes, last_played,
                        achievements_total, achievements_unlocked, completion_pct,
@@ -1515,7 +1515,7 @@ async def steam_sync_new_games() -> str:
                      status, datetime.now().isoformat()]
                 )
 
-                // Insert achievements
+                # Insert achievements
                 for a in achs:
                     await _execute_turso(
                         """INSERT OR IGNORE INTO achievements (app_id, api_name, display_name,
@@ -1526,13 +1526,13 @@ async def steam_sync_new_games() -> str:
                     )
 
                 hltb_str = f"{hltb_main:.0f}h" if hltb_main else "?"
-                added.append(f"**{name}** — {primary_genre} | Reviews: {review_desc or 'N/A'} | "
+                added.append(f"**{name}**  -  {primary_genre} | Reviews: {review_desc or 'N/A'} | "
                              f"HLTB: {hltb_str} | Deck: {deck_status} | {ach_total} achievements")
 
             except Exception as e:
                 errors.append(f"{name}: {e}")
 
-        // Log
+        # Log
         await _execute_turso(
             "INSERT INTO sync_log (sync_time, sync_type, games_added, status) VALUES (?, ?, ?, ?)",
             [datetime.now().isoformat(), "weekly_new_games", len(added),
@@ -1564,7 +1564,7 @@ async def steam_sync_refresh_metadata(params: SyncRefreshInput) -> str:
     increasing offset until all games are processed. Each call handles ~75 games.
     """
     try:
-        // Get batch of games
+        # Get batch of games
         games = await _query_turso(
             "SELECT app_id, name, review_score, deck_status, all_genres FROM games ORDER BY app_id LIMIT ? OFFSET ?",
             [params.batch_size, params.offset]
@@ -1585,9 +1585,9 @@ async def steam_sync_refresh_metadata(params: SyncRefreshInput) -> str:
             changes = []
 
             try:
-                // Refresh reviews
+                # Refresh reviews
                 new_score, new_count, new_desc = await _fetch_reviews(app_id)
-                await asyncio.sleep(1.5)  // Rate limit for store API
+                await asyncio.sleep(1.5)  # Rate limit for store API
 
                 if new_score is not None:
                     old_score = g.get("review_score")
@@ -1599,7 +1599,7 @@ async def steam_sync_refresh_metadata(params: SyncRefreshInput) -> str:
                         [new_score, new_count, new_desc, datetime.now().isoformat(), app_id]
                     )
 
-                // Refresh Deck status
+                # Refresh Deck status
                 new_deck = await _fetch_deck_status(app_id)
                 if new_deck != "unknown":
                     old_deck = g.get("deck_status", "unknown")
@@ -1610,7 +1610,7 @@ async def steam_sync_refresh_metadata(params: SyncRefreshInput) -> str:
                         [new_deck, datetime.now().isoformat(), app_id]
                     )
 
-                // Refresh genres from store
+                # Refresh genres from store
                 store = await _fetch_store_data(app_id)
                 await asyncio.sleep(1)
                 if store:
@@ -1626,7 +1626,7 @@ async def steam_sync_refresh_metadata(params: SyncRefreshInput) -> str:
                             [new_primary, new_genres, datetime.now().isoformat(), app_id]
                         )
 
-                    // Also refresh metacritic if available
+                    # Also refresh metacritic if available
                     mc = store.get("metacritic", {})
                     if mc and mc.get("score"):
                         await _execute_turso(
@@ -1640,7 +1640,7 @@ async def steam_sync_refresh_metadata(params: SyncRefreshInput) -> str:
             except Exception as e:
                 errors.append(f"{name}: {e}")
 
-        // Log
+        # Log
         await _execute_turso(
             "INSERT INTO sync_log (sync_time, sync_type, games_updated, status) VALUES (?, ?, ?, ?)",
             [datetime.now().isoformat(), f"biweekly_metadata_offset_{params.offset}",
@@ -1650,7 +1650,7 @@ async def steam_sync_refresh_metadata(params: SyncRefreshInput) -> str:
         processed_through = params.offset + len(games)
         more_remaining = processed_through < total
 
-        lines = [f"## Metadata Refresh — Batch {params.offset // params.batch_size + 1}\n"]
+        lines = [f"## Metadata Refresh  -  Batch {params.offset // params.batch_size + 1}\n"]
         lines.append(f"Processed games **{params.offset + 1}–{processed_through}** of **{total}**\n")
 
         if updated:
@@ -1679,7 +1679,7 @@ async def steam_sync_refresh_metadata(params: SyncRefreshInput) -> str:
 
 
 # =============================================================================
-# Prompts (skills exposed to any MCP client — phone, web, etc.)
+# Prompts (skills exposed to any MCP client  -  phone, web, etc.)
 # =============================================================================
 
 _SKILLS_DIR = pathlib.Path(__file__).parent / "skills"
@@ -1722,7 +1722,7 @@ def steam_game_intelligence_prompt() -> str:
 
 
 # =============================================================================
-# Entry point (local development only — Horizon ignores __main__)
+# Entry point (local development only  -  Horizon ignores __main__)
 # =============================================================================
 
 if __name__ == "__main__":
