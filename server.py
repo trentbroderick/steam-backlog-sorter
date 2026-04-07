@@ -9,6 +9,7 @@ and managing the backlog across multiple devices.
 
 import json
 import os
+import pathlib
 import asyncio
 from typing import Optional, List, Dict, Any
 from enum import Enum
@@ -1529,6 +1530,49 @@ async def steam_sync_refresh_metadata(params: SyncRefreshInput) -> str:
 
     except Exception as e:
         return f"Error in metadata refresh: {e}"
+
+
+# =============================================================================
+# Prompts (skills exposed to any MCP client — phone, web, etc.)
+# =============================================================================
+
+_SKILLS_DIR = pathlib.Path(__file__).parent / "skills"
+
+
+def _load_skill(name: str) -> str:
+    """Load a skill's SKILL.md content from the skills directory."""
+    path = _SKILLS_DIR / name / "SKILL.md"
+    if path.exists():
+        return path.read_text(encoding="utf-8")
+    return (f"Skill '{name}' not found on the server. "
+            f"The skill file should exist at skills/{name}/SKILL.md in the repo.")
+
+
+@mcp.prompt(
+    name="steam_session_planner",
+    description="Pick ONE Steam game for a specific play session. Use when you want a decisive recommendation for tonight, an hour, or a specific device (Deck / Living Room / Office PC). Returns opinionated single-game pick, not a top 5 list."
+)
+def steam_session_planner_prompt() -> str:
+    """Load the steam-session-planner skill content."""
+    return _load_skill("steam-session-planner")
+
+
+@mcp.prompt(
+    name="steam_backlog_triage",
+    description="Walk through structured triage of the unplayed Steam backlog. Use when you want to clean up your library by making batch keep/abandon/not-interested decisions on 10-20 games at a time."
+)
+def steam_backlog_triage_prompt() -> str:
+    """Load the steam-backlog-triage skill content."""
+    return _load_skill("steam-backlog-triage")
+
+
+@mcp.prompt(
+    name="steam_game_intelligence",
+    description="Foundational context for correctly interpreting Steam library data. Critical rules about completion_pct (achievement completionism, NOT story progress), how to judge whether a game is actually beaten, and genre-aware interpretation. Load this before any other Steam library question."
+)
+def steam_game_intelligence_prompt() -> str:
+    """Load the steam-game-intelligence skill content."""
+    return _load_skill("steam-game-intelligence")
 
 
 # =============================================================================
