@@ -463,7 +463,6 @@ def _build_recommendations_app(top, device_label: str, mood: Optional[str], hour
 
 @mcp.tool(
     name="steam_get_recommendations",
-    app=True,
     annotations={
         "title": "Get Game Recommendations",
         "readOnlyHint": True,
@@ -472,7 +471,7 @@ def _build_recommendations_app(top, device_label: str, mood: Optional[str], hour
         "openWorldHint": False
     }
 )
-async def steam_get_recommendations(params: GetRecommendationsInput) -> "PrefabApp":
+async def steam_get_recommendations(params: GetRecommendationsInput) -> str:
     """Get personalized game recommendations from the library.
 
     Analyzes all 908 games considering: review scores, HLTB completion times,
@@ -633,11 +632,7 @@ async def steam_get_recommendations(params: GetRecommendationsInput) -> "PrefabA
             DeviceEnum.ANY: "any device",
         }.get(params.device, "any device")
 
-        # Rich UI via MCP Apps + Prefab
-        if _HAS_PREFAB:
-            return _build_recommendations_app(top, device_label, params.mood, params.available_hours)
-
-        # Plain text fallback for non-Prefab environments
+        # Plain text output (Prefab disabled to diagnose Horizon 500 errors)
         lines = [f"## Recommended Games for {device_label}\n"]
         if params.mood:
             lines.append(f"*Mood: {params.mood}*\n")
