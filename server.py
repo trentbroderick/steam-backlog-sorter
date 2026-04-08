@@ -718,23 +718,56 @@ async def steam_debug() -> str:
     except Exception as e:
         lines.append(f"  version check failed: {e}")
 
-    # Prefab pipeline smoke-test
+    dummy_top = [(80.0, {
+        "name": "Test Game", "app_id": 12345, "playtime_minutes": 60,
+        "completion_pct": 50.0, "review_score": 90.0, "review_count": 5000,
+        "hltb_main_hours": 10.0, "deck_status": "verified", "primary_genre": "Action",
+        "developer": "Test Dev", "review_desc": "Very Positive",
+        "achievements_unlocked": 5, "achievements_total": 10,
+    }, ["High score", "Deck verified"])]
+
+    # Prefab pipeline smoke-test — mirrors exactly what steam_get_recommendations does
     if _HAS_PREFAB:
+        import traceback as _tb
+        # Step 1: build the app object
         try:
-            dummy_top = [(80.0, {
-                "name": "Test Game", "app_id": 12345, "playtime_minutes": 60,
-                "completion_pct": 50.0, "review_score": 90.0, "hltb_main_hours": 10.0,
-                "deck_status": "verified", "primary_genre": "Action",
-                "developer": "Test Dev", "review_desc": "Very Positive",
-            }, ["High score", "Deck verified"])]
             app = _build_recommendations_app(dummy_top, "Steam Deck", None, None)
-            j = app.to_json()
-            import json as _json
-            lines.append(f"Prefab pipeline: OK ({len(_json.dumps(j))} bytes)")
+            lines.append("Prefab build: OK")
         except Exception as e:
-            import traceback as _tb
-            lines.append(f"Prefab pipeline FAILED: {type(e).__name__}: {e}")
+            lines.append(f"Prefab build FAILED: {type(e).__name__}: {e}")
             lines.append(_tb.format_exc())
+            app = None
+
+        # Step 2: render HTML — this is what steam_get_recommendations actually calls
+        if app is not None:
+            try:
+                html = app.html(renderer_mode="cdn")
+                lines.append(f"Prefab html(renderer_mode='cdn'): OK ({len(html)} bytes)")
+            except Exception as e:
+                lines.append(f"Prefab html() FAILED: {type(e).__name__}: {e}")
+                lines.append(_tb.format_exc())
+                html = None
+        else:
+            html = None
+
+        # Step 3: construct the ToolResult + EmbeddedResource — reproduces the full return path
+        if html is not None:
+            try:
+                _tr = ToolResult(content=[
+                    TextContent(type="text", text="test"),
+                    EmbeddedResource(
+                        type="resource",
+                        resource=TextResourceContents(
+                            uri="steam://recommendations/view",
+                            mimeType=_PREFAB_UI_MIME_TYPE,
+                            text=html,
+                        ),
+                    ),
+                ])
+                lines.append(f"ToolResult construction: OK (MIME={_PREFAB_UI_MIME_TYPE})")
+            except Exception as e:
+                lines.append(f"ToolResult construction FAILED: {type(e).__name__}: {e}")
+                lines.append(_tb.format_exc())
     else:
         lines.append("Prefab pipeline: SKIPPED (_HAS_PREFAB=False)")
         try:
@@ -743,12 +776,24 @@ async def steam_debug() -> str:
         except Exception as e2:
             lines.append(f"  prefab_ui import error: {e2}")
 
-    # DB connectivity
+    # DB connectivity + candidate query (mirrors steam_get_recommendations SQL)
     try:
         rows = await _query_turso("SELECT COUNT(*) as cnt FROM games")
         lines.append(f"DB connection: OK ({rows[0]['cnt'] if rows else '?'} games)")
     except Exception as e:
         lines.append(f"DB connection FAILED: {type(e).__name__}: {e}")
+
+    try:
+        candidates = await _query_turso(
+            """SELECT name, review_score FROM games
+               WHERE status NOT IN ('completed','abandoned','not_interested')
+               AND review_score IS NOT NULL
+               ORDER BY review_score DESC LIMIT 3"""
+        )
+        names = ", ".join(g["name"] for g in candidates) if candidates else "none"
+        lines.append(f"Candidate query: OK ({len(candidates)} rows — {names})")
+    except Exception as e:
+        lines.append(f"Candidate query FAILED: {type(e).__name__}: {e}")
 
     return "\n".join(lines)
 
