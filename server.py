@@ -19,13 +19,6 @@ import httpx
 import libsql_client
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from fastmcp import FastMCP
-from fastmcp.tools.base import ToolResult
-from mcp.types import EmbeddedResource, TextResourceContents, TextContent
-
-try:
-    from fastmcp.apps.config import UI_MIME_TYPE as _PREFAB_UI_MIME_TYPE
-except ImportError:
-    _PREFAB_UI_MIME_TYPE = "text/html;profile=mcp-app"
 
 try:
     from prefab_ui.app import PrefabApp
@@ -470,6 +463,7 @@ def _build_recommendations_app(top, device_label: str, mood: Optional[str], hour
 
 @mcp.tool(
     name="steam_get_recommendations",
+    app=True,
     annotations={
         "title": "Get Game Recommendations",
         "readOnlyHint": True,
@@ -666,24 +660,11 @@ async def steam_get_recommendations(params: GetRecommendationsInput):
 
         fallback_text = "\n".join(lines)
 
-        # Try to render Prefab UI cards via EmbeddedResource (avoids structuredContent 500)
         if _HAS_PREFAB:
             try:
-                app = _build_recommendations_app(top, device_label, params.mood, params.available_hours)
-                html = app.html(renderer_mode="cdn")
-                return ToolResult(content=[
-                    TextContent(type="text", text=fallback_text),
-                    EmbeddedResource(
-                        type="resource",
-                        resource=TextResourceContents(
-                            uri="steam://recommendations/view",
-                            mimeType=_PREFAB_UI_MIME_TYPE,
-                            text=html,
-                        ),
-                    ),
-                ])
+                return _build_recommendations_app(top, device_label, params.mood, params.available_hours)
             except Exception:
-                pass  # Fall through to plain text on any Prefab error
+                pass
 
         return fallback_text
 
