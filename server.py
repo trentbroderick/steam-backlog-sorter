@@ -19,6 +19,13 @@ import httpx
 import libsql_client
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from fastmcp import FastMCP
+from fastmcp.tools.base import ToolResult
+from mcp.types import EmbeddedResource, TextResourceContents, TextContent
+
+try:
+    from fastmcp.apps.config import UI_MIME_TYPE as _PREFAB_UI_MIME_TYPE
+except ImportError:
+    _PREFAB_UI_MIME_TYPE = "text/html;profile=mcp-app"
 
 try:
     from prefab_ui.app import PrefabApp
@@ -632,7 +639,7 @@ async def steam_get_recommendations(params: GetRecommendationsInput) -> str:
             DeviceEnum.ANY: "any device",
         }.get(params.device, "any device")
 
-        # Plain text output (Prefab disabled to diagnose Horizon 500 errors)
+        # Build text fallback for LLM context
         lines = [f"## Recommended Games for {device_label}\n"]
         if params.mood:
             lines.append(f"*Mood: {params.mood}*\n")
@@ -657,20 +664,32 @@ async def steam_get_recommendations(params: GetRecommendationsInput) -> str:
             lines.append(f"**Why:** {'; '.join(reasons)}")
             lines.append("")
 
-        return "\n".join(lines)
+        fallback_text = "\n".join(lines)
+
+        # Try to render Prefab UI cards via EmbeddedResource (avoids structuredContent 500)
+        if _HAS_PREFAB:
+            try:
+                app = _build_recommendations_app(top, device_label, params.mood, params.available_hours)
+                html = app.html(renderer_mode="cdn")
+                return ToolResult(content=[
+                    TextContent(type="text", text=fallback_text),
+                    EmbeddedResource(
+                        type="resource",
+                        resource=TextResourceContents(
+                            uri="steam://recommendations/view",
+                            mimeType=_PREFAB_UI_MIME_TYPE,
+                            text=html,
+                        ),
+                    ),
+                ])
+            except Exception:
+                pass  # Fall through to plain text on any Prefab error
+
+        return fallback_text
 
     except Exception as e:
         import traceback as _tb
         err_detail = _tb.format_exc()
-        if _HAS_PREFAB:
-            try:
-                with Column(gap=4) as err_view:
-                    Heading("⚠️ Recommendations Error")
-                    Muted(f"{type(e).__name__}: {e}")
-                    Muted(err_detail[:500])
-                return PrefabApp(view=err_view)
-            except Exception:
-                pass
         return f"Error generating recommendations: {type(e).__name__}: {e}\n\n{err_detail}"
 
 
