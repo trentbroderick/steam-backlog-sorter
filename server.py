@@ -11,6 +11,7 @@ import json
 import os
 import pathlib
 import asyncio
+import base64
 from typing import Optional, List, Dict, Any
 from enum import Enum
 from datetime import datetime
@@ -412,7 +413,20 @@ def _review_badge_variant(score: Optional[float]) -> str:
     return "destructive"
 
 
-def _build_recommendations_app(top, device_label: str, mood: Optional[str], hours: Optional[float]) -> "PrefabApp":
+async def _fetch_image_data_url(app_id: int, client: httpx.AsyncClient) -> Optional[str]:
+    """Fetch a Steam header image and return it as a base64 data URL."""
+    url = f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/header.jpg"
+    try:
+        resp = await client.get(url, timeout=5.0)
+        if resp.status_code == 200:
+            data = base64.b64encode(resp.content).decode()
+            return f"data:image/jpeg;base64,{data}"
+    except Exception:
+        pass
+    return None
+
+
+def _build_recommendations_app(top, device_label: str, mood: Optional[str], hours: Optional[float], image_data_urls: Optional[Dict[int, str]] = None) -> "PrefabApp":
     subtitle_bits = []
     if mood:  subtitle_bits.append(f"mood: {mood}")
     if hours: subtitle_bits.append(f"{hours}h available")
@@ -431,12 +445,14 @@ def _build_recommendations_app(top, device_label: str, mood: Optional[str], hour
                 app_id = g.get("app_id")
                 with Card(css_class="overflow-hidden"):
                     if app_id:
-                        Image(
-                            src=f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/header.jpg",
-                            alt=g["name"],
-                            css_class="w-full object-cover",
-                            height="140px",
-                        )
+                        img_src = (image_data_urls or {}).get(app_id)
+                        if img_src:
+                            Image(
+                                src=img_src,
+                                alt=g["name"],
+                                css_class="w-full object-cover",
+                                height="140px",
+                            )
                     with CardHeader():
                         CardTitle(content=f"{i}. {g['name']}")
                         CardDescription(content=g.get("developer") or g.get("primary_genre") or "")
@@ -455,10 +471,7 @@ def _build_recommendations_app(top, device_label: str, mood: Optional[str], hour
                                 Badge(label=f"{rs:.0f}% positive", variant=_review_badge_variant(rs))
                         Muted(f"Why: {'; '.join(reasons[:2])}")
 
-    return PrefabApp(
-        view=view,
-        connect_domains=["cdn.cloudflare.steamstatic.com"],
-    )
+    return PrefabApp(view=view)
 
 
 @mcp.tool(
@@ -662,7 +675,18 @@ async def steam_get_recommendations(params: GetRecommendationsInput):
 
         if _HAS_PREFAB:
             try:
-                return _build_recommendations_app(top, device_label, params.mood, params.available_hours)
+                app_ids = [g.get("app_id") for _, g, _ in top if g.get("app_id")]
+                async with httpx.AsyncClient() as client:
+                    results = await asyncio.gather(
+                        *[_fetch_image_data_url(aid, client) for aid in app_ids],
+                        return_exceptions=True,
+                    )
+                image_data_urls = {
+                    aid: url
+                    for aid, url in zip(app_ids, results)
+                    if isinstance(url, str)
+                }
+                return _build_recommendations_app(top, device_label, params.mood, params.available_hours, image_data_urls)
             except Exception:
                 pass
 
