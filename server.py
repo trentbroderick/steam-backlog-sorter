@@ -219,6 +219,22 @@ class GetRecommendationsInput(BaseModel):
     include_in_progress: Optional[bool] = Field(default=True, description="Include games you've already started?")
 
 
+class RenderGamesInput(BaseModel):
+    """Input for rendering a custom list of games in the Prefab UI."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    app_ids: list[int] = Field(
+        ...,
+        description="List of Steam app_ids to render (from steam_run_query results)",
+        min_length=1,
+        max_length=20
+    )
+    label: Optional[str] = Field(
+        default="Custom Selection",
+        description="Header label shown in the UI (e.g. 'Hidden Gems', 'Short Horror Games')"
+    )
+
+
 class GetGameDetailInput(BaseModel):
     """Input for getting detailed info about a specific game."""
     game_name: str = Field(..., description="Name or partial name of the game to look up", min_length=1)
@@ -776,6 +792,9 @@ async def steam_get_recommendations(params: GetRecommendationsInput):
     - "What games am I closest to finishing?"
     - "Recommend something based on my mood / genre / time"
     Ask clarifying questions (mood, device, time available, genre) if the user hasn't specified.
+
+    For bespoke queries (hidden gems, specific filters, custom SQL), use steam_run_query
+    to get app_ids, then pass them to steam_render_games for the Prefab UI.
     """
     try:
         # Build different recommendation pools
@@ -982,6 +1001,81 @@ async def steam_get_recommendations(params: GetRecommendationsInput):
         import traceback as _tb
         err_detail = _tb.format_exc()
         return f"Error generating recommendations: {type(e).__name__}: {e}\n\n{err_detail}"
+
+
+@mcp.tool(
+    name="steam_render_games",
+    app=True,
+    annotations={
+        "title": "Render Games in Prefab UI",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False
+    }
+)
+async def steam_render_games(params: RenderGamesInput):
+    """Render a custom list of games in the Prefab card UI.
+
+    Use this after steam_run_query when the user wants a visual presentation
+    of a bespoke game selection (e.g. hidden gems, short games, a specific genre).
+
+    Workflow:
+    1. Run steam_run_query with any custom SQL to get app_ids
+    2. Pass those app_ids to this tool
+    3. This tool renders them in the full Prefab card UI
+
+    Do NOT call steam_get_recommendations first — that renders its own query.
+    Just call this tool directly with your app_id list.
+    """
+    try:
+        placeholders = ",".join("?" * len(params.app_ids))
+        sql = f"""SELECT name, app_id, playtime_minutes, completion_pct, review_score,
+                         review_count, review_desc, hltb_main_hours, hltb_extra_hours,
+                         deck_status, primary_genre, all_genres, status, metacritic,
+                         achievements_unlocked, achievements_total, last_played_date,
+                         developer, hltb_completionist_hours
+                  FROM games
+                  WHERE app_id IN ({placeholders})"""
+        rows = await _query_turso(sql, params.app_ids)
+
+        if not rows:
+            return "No games found for the provided app_ids."
+
+        # Preserve the caller's ordering
+        order = {aid: i for i, aid in enumerate(params.app_ids)}
+        rows.sort(key=lambda g: order.get(g.get("app_id"), 999))
+
+        # Wrap as (score, game, reasons) tuples matching _build_recommendations_app signature
+        top = [(0.0, g, [g.get("primary_genre", ""), g.get("review_desc", "")]) for g in rows]
+
+        if _HAS_PREFAB:
+            try:
+                app_ids = [g.get("app_id") for g in rows if g.get("app_id")]
+                async with httpx.AsyncClient() as client:
+                    results = await asyncio.gather(
+                        *[_fetch_image_data_url(aid, client) for aid in app_ids],
+                        return_exceptions=True,
+                    )
+                image_data_urls = {
+                    aid: url
+                    for aid, url in zip(app_ids, results)
+                    if isinstance(url, str)
+                }
+                return _build_recommendations_app(top, params.label, None, None, image_data_urls, total_candidates=len(rows))
+            except Exception:
+                pass
+
+        # Fallback text
+        lines = [f"## {params.label}\n"]
+        for g in rows:
+            pt = g.get("playtime_minutes") or 0
+            lines.append(f"- **{g['name']}** — {g.get('review_desc', '')} | {g.get('primary_genre', '')} | {_format_hours(pt)} played")
+        return "\n".join(lines)
+
+    except Exception as e:
+        import traceback as _tb
+        return f"Error rendering games: {type(e).__name__}: {e}\n\n{_tb.format_exc()}"
 
 
 @mcp.tool(
