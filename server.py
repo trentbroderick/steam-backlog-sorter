@@ -569,8 +569,10 @@ def _build_recommendations_app(
 async def steam_get_recommendations(params: GetRecommendationsInput):
     """Get personalized game recommendations from the library.
 
-    Analyzes all 908 games considering: review scores, HLTB completion times,
+    Analyzes the entire library considering: review scores, HLTB completion times,
     achievement progress, Deck compatibility, genre, and play history.
+    Games with status='completed' are deprioritized (score penalty) rather than excluded,
+    so they only surface if nothing better matches.
 
     Use this for questions like:
     - "What should I play on my Steam Deck tonight?"
@@ -578,10 +580,13 @@ async def steam_get_recommendations(params: GetRecommendationsInput):
     - "What RPGs should I focus on?"
     - "What cult classics am I sleeping on?"
     - "What games am I closest to finishing?"
+    - "Recommend something based on my mood / genre / time"
+    Ask clarifying questions (mood, device, time available, genre) if the user hasn't specified.
     """
     try:
         # Build different recommendation pools
-        conditions = ["status NOT IN ('completed', 'abandoned', 'not_interested')"]
+        # completed games are deprioritized in scoring rather than excluded
+        conditions = ["status NOT IN ('abandoned', 'not_interested')"]
         query_params = []
 
         if params.device == DeviceEnum.STEAM_DECK:
@@ -598,7 +603,7 @@ async def steam_get_recommendations(params: GetRecommendationsInput):
 
         where = "WHERE " + " AND ".join(conditions) if conditions else ""
 
-        # Pull candidates  -  we get a generous pool to score from
+        # Pull all candidates - no cap, score the entire library
         sql = f"""SELECT name, app_id, playtime_minutes, completion_pct, review_score,
                          review_count, review_desc, hltb_main_hours, hltb_extra_hours,
                          deck_status, primary_genre, all_genres, status, metacritic,
@@ -606,9 +611,7 @@ async def steam_get_recommendations(params: GetRecommendationsInput):
                          developer, hltb_completionist_hours
                   FROM games
                   {where}
-                  AND review_score IS NOT NULL
-                  ORDER BY review_score DESC
-                  LIMIT 200"""
+                  AND review_score IS NOT NULL"""
 
         rows = await _query_turso(sql, query_params if query_params else None)
 
@@ -710,6 +713,13 @@ async def steam_get_recommendations(params: GetRecommendationsInput):
             if pt == 0:
                 score += 3
                 reasons.append("Unplayed  -  fresh experience")
+
+            # Deprioritize games the user has already completed (story done)
+            # These sink to the bottom but can still surface if explicitly relevant
+            game_status = g.get("status") or ""
+            if game_status == "completed":
+                score -= 100
+                reasons.append("Story completed  -  deprioritized")
 
             if not reasons:
                 reasons.append(f"{g.get('primary_genre', 'Game')}  -  {g.get('review_desc', '')}")
