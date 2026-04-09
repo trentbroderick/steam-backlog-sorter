@@ -233,6 +233,14 @@ class RenderGamesInput(BaseModel):
         default="Custom Selection",
         description="Header label shown in the UI (e.g. 'Hidden Gems', 'Short Horror Games')"
     )
+    notes: Optional[dict[str, str]] = Field(
+        default=None,
+        description=(
+            "Optional per-game analysis keyed by app_id (as string). "
+            "Shows in the card footer in place of the generic genre/review label. "
+            "E.g. {\"413150\": \"Solo-dev masterpiece — zero playtime, infinite depth\"}"
+        )
+    )
 
 
 class GetGameDetailInput(BaseModel):
@@ -644,16 +652,6 @@ def _build_recommendations_app(
                 if hours:
                     Badge(label=f"{hours}h session", variant="outline")
 
-        # Interactivity hint
-        with Alert():
-            AlertTitle("These picks are interactive")
-            AlertDescription(
-                "Click any game and ask me about it — e.g. "
-                "\"Tell me more about [game]\" for a deep dive, "
-                "\"Plan a session for [game]\" for tonight, "
-                "or \"What achievements am I close to finishing in [game]?\""
-            )
-
         # Summary metrics
         with Grid(columns=4, gap=3):
             Metric(
@@ -1047,7 +1045,12 @@ async def steam_render_games(params: RenderGamesInput):
         rows.sort(key=lambda g: order.get(g.get("app_id"), 999))
 
         # Wrap as (score, game, reasons) tuples matching _build_recommendations_app signature
-        top = [(0.0, g, [g.get("primary_genre", ""), g.get("review_desc", "")]) for g in rows]
+        top = []
+        for g in rows:
+            app_id = g.get("app_id")
+            note = (params.notes or {}).get(str(app_id)) if app_id else None
+            reasons = [note] if note else [r for r in [g.get("primary_genre", ""), g.get("review_desc", "")] if r]
+            top.append((0.0, g, reasons))
 
         if _HAS_PREFAB:
             try:
