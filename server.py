@@ -23,6 +23,7 @@ from fastmcp import FastMCP
 
 try:
     from prefab_ui.app import PrefabApp
+    from prefab_ui.themes import Theme
     from prefab_ui.components import (
         Column, Row, Grid, Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription,
         Dashboard, DashboardItem,
@@ -30,6 +31,7 @@ try:
         Metric, Ring, Tabs, Tab,
         DataTable, DataTableColumn,
         Alert, AlertTitle, AlertDescription,
+        Text, Div, Small,
     )
     _HAS_PREFAB = True
 except Exception:
@@ -417,6 +419,66 @@ def _review_badge_variant(score: Optional[float]) -> str:
     return "destructive"
 
 
+# -- Genre accent colors -------------------------------------------------------
+# Pre-built Tailwind class strings (full strings required for JIT discovery).
+_GENRE_CARD_CLASSES: Dict[str, str] = {
+    "action":               "border-t-2 border-red-500/40",
+    "indie":                "border-t-2 border-pink-500/40",
+    "adventure":            "border-t-2 border-emerald-500/40",
+    "rpg":                  "border-t-2 border-purple-500/40",
+    "strategy":             "border-t-2 border-amber-500/40",
+    "simulation":           "border-t-2 border-cyan-500/40",
+    "casual":               "border-t-2 border-sky-400/40",
+    "racing":               "border-t-2 border-orange-500/40",
+    "sports":               "border-t-2 border-lime-500/40",
+    "free to play":         "border-t-2 border-teal-400/40",
+    "massively multiplayer":"border-t-2 border-violet-500/40",
+    "early access":         "border-t-2 border-yellow-500/40",
+    "education":            "border-t-2 border-blue-500/40",
+    "sexual content":       "border-t-2 border-rose-400/40",
+    "nudity":               "border-t-2 border-rose-400/40",
+}
+
+_GENRE_HERO_CLASSES: Dict[str, str] = {
+    "action":               "border-t-4 border-red-500/60",
+    "indie":                "border-t-4 border-pink-500/60",
+    "adventure":            "border-t-4 border-emerald-500/60",
+    "rpg":                  "border-t-4 border-purple-500/60",
+    "strategy":             "border-t-4 border-amber-500/60",
+    "simulation":           "border-t-4 border-cyan-500/60",
+    "casual":               "border-t-4 border-sky-400/60",
+    "racing":               "border-t-4 border-orange-500/60",
+    "sports":               "border-t-4 border-lime-500/60",
+    "free to play":         "border-t-4 border-teal-400/60",
+    "massively multiplayer":"border-t-4 border-violet-500/60",
+    "early access":         "border-t-4 border-yellow-500/60",
+    "education":            "border-t-4 border-blue-500/60",
+    "sexual content":       "border-t-4 border-rose-400/60",
+    "nudity":               "border-t-4 border-rose-400/60",
+}
+
+
+def _genre_card_class(genre: str, hero: bool = False) -> str:
+    """Return Tailwind border classes for a genre, for card or hero treatment."""
+    key = (genre or "").lower().strip()
+    mapping = _GENRE_HERO_CLASSES if hero else _GENRE_CARD_CLASSES
+    return mapping.get(key, "border-t-2 border-slate-500/40" if not hero else "border-t-4 border-slate-500/60")
+
+
+# -- Recommendations UI theme -------------------------------------------------
+_RECO_THEME = Theme(
+    mode="dark",
+    font="Inter",
+    dark_css="""
+        --background: 220 16% 8%;
+        --card: 220 16% 11%;
+        --card-foreground: 210 20% 90%;
+    """,
+) if _HAS_PREFAB else None
+
+_RECO_STYLESHEET = "body { background: linear-gradient(180deg, hsl(220 16% 6%) 0%, hsl(220 16% 12%) 100%); min-height: 100vh; }"
+
+
 async def _fetch_image_data_url(app_id: int, client: httpx.AsyncClient) -> Optional[str]:
     """Fetch a Steam header image and return it as a base64 data URL."""
     url = f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/header.jpg"
@@ -441,20 +503,23 @@ def _build_game_grid(items, image_data_urls):
             app_id = g.get("app_id")
             ach_unlocked = g.get("achievements_unlocked") or 0
             ach_total    = g.get("achievements_total") or 0
+            genre_border = _genre_card_class(g.get("primary_genre", ""))
 
-            with Card(css_class="overflow-hidden"):
+            with Card(css_class=f"overflow-hidden {genre_border} transition-all duration-200 hover:scale-[1.02] hover:shadow-xl"):
                 if app_id:
                     img_src = (image_data_urls or {}).get(app_id)
                     if img_src:
                         Image(src=img_src, alt=g["name"], css_class="w-full object-cover", height="140px")
 
                 with CardHeader():
-                    CardTitle(content=f"{i}. {g['name']}")
+                    CardTitle(content=f"{i}. {g['name']}", css_class="text-lg font-bold")
                     CardDescription(content=g.get("developer") or g.get("primary_genre") or "")
 
                 with CardContent():
-                    # Review score progress bar
-                    Progress(value=int(rs), min=0, max=100, variant=_review_badge_variant(rs))
+                    # Review score progress bar with label
+                    if rs:
+                        Small(f"Review: {rs:.0f}%", css_class="text-muted-foreground mb-1")
+                        Progress(value=int(rs), min=0, max=100, variant=_review_badge_variant(rs))
 
                     # Achievement Ring (if the game has achievements and has been played)
                     if pct > 0 and ach_total > 0:
@@ -467,19 +532,22 @@ def _build_game_grid(items, image_data_urls):
                             )
                             Muted(f"{ach_unlocked}/{ach_total} achievements")
 
-                    # Metadata badges
+                    # Metadata badges — color-coded by type
                     with Row(gap=2, css_class="mt-2 flex-wrap"):
                         deck = g.get("deck_status", "")
-                        if deck in ("verified", "playable"):
-                            Badge(label=f"🎮 Deck {deck}", variant="outline")
+                        if deck == "verified":
+                            Badge(label="🎮 Deck Verified", variant="success")
+                        elif deck == "playable":
+                            Badge(label="🎮 Deck Playable", variant="info")
                         if hltb:
                             left = max(0, hltb - pt / 60) if pt > 0 else hltb
-                            Badge(label=f"⏱ {left:.0f}h {'left' if pt > 0 else 'HLTB'}", variant="outline")
+                            Badge(label=f"⏱ {left:.0f}h {'left' if pt > 0 else 'HLTB'}", variant="secondary")
                         if rs:
                             Badge(label=f"{rs:.0f}% positive", variant=_review_badge_variant(rs))
 
                 with CardFooter():
-                    Muted(f"Why: {'; '.join(reasons[:2])}")
+                    with Div(css_class="border-l-2 border-blue-500/50 pl-3 w-full"):
+                        Text(f"✨ {'; '.join(reasons[:2])}", css_class="text-sm italic text-muted-foreground")
 
 
 def _build_recommendations_app(
@@ -541,7 +609,58 @@ def _build_recommendations_app(
 
         Separator()
 
-        # Tabbed game grid
+        # Hero card for #1 pick
+        if top:
+            _, hero_g, hero_reasons = top[0]
+            hero_pt   = hero_g.get("playtime_minutes") or 0
+            hero_hltb = hero_g.get("hltb_main_hours")
+            hero_pct  = hero_g.get("completion_pct") or 0
+            hero_rs   = hero_g.get("review_score") or 0
+            hero_app  = hero_g.get("app_id")
+            hero_ach_u = hero_g.get("achievements_unlocked") or 0
+            hero_ach_t = hero_g.get("achievements_total") or 0
+            hero_border = _genre_card_class(hero_g.get("primary_genre", ""), hero=True)
+
+            with Card(css_class=f"overflow-hidden {hero_border} shadow-lg"):
+                if hero_app:
+                    img_src = (image_data_urls or {}).get(hero_app)
+                    if img_src:
+                        Image(src=img_src, alt=hero_g["name"], css_class="w-full object-cover", height="260px")
+                with CardHeader():
+                    CardTitle(content=f"🏆 {hero_g['name']}", css_class="text-2xl font-extrabold")
+                    CardDescription(
+                        content=hero_g.get("developer") or hero_g.get("primary_genre") or "",
+                        css_class="text-base",
+                    )
+                with CardContent():
+                    if hero_rs:
+                        Small(f"Review: {hero_rs:.0f}%", css_class="text-muted-foreground mb-1")
+                        Progress(value=int(hero_rs), min=0, max=100, variant=_review_badge_variant(hero_rs))
+                    if hero_pct > 0 and hero_ach_t > 0:
+                        with Row(gap=3, css_class="mt-3 items-center"):
+                            Ring(
+                                value=int(hero_pct), min=0, max=100,
+                                label=f"{hero_pct:.0f}%",
+                                size="sm",
+                                variant=_review_badge_variant(hero_pct),
+                            )
+                            Muted(f"{hero_ach_u}/{hero_ach_t} achievements")
+                    with Row(gap=2, css_class="mt-3 flex-wrap"):
+                        hero_deck = hero_g.get("deck_status", "")
+                        if hero_deck == "verified":
+                            Badge(label="🎮 Deck Verified", variant="success")
+                        elif hero_deck == "playable":
+                            Badge(label="🎮 Deck Playable", variant="info")
+                        if hero_hltb:
+                            left = max(0, hero_hltb - hero_pt / 60) if hero_pt > 0 else hero_hltb
+                            Badge(label=f"⏱ {left:.0f}h {'left' if hero_pt > 0 else 'HLTB'}", variant="secondary")
+                        if hero_rs:
+                            Badge(label=f"{hero_rs:.0f}% positive", variant=_review_badge_variant(hero_rs))
+                with CardFooter():
+                    with Div(css_class="border-l-2 border-blue-500/50 pl-3 w-full"):
+                        Text(f"✨ {'; '.join(hero_reasons)}", css_class="text-sm italic text-muted-foreground")
+
+        # Tabbed game grid (remaining picks)
         with Tabs():
             with Tab(f"All Picks"):
                 _build_game_grid(top, image_data_urls)
@@ -552,7 +671,11 @@ def _build_recommendations_app(
                 with Tab(f"Quick Plays ({len(quick_plays)})"):
                     _build_game_grid(quick_plays, image_data_urls)
 
-    return PrefabApp(view=view)
+    return PrefabApp(
+        view=view,
+        theme=_RECO_THEME,
+        stylesheets=[_RECO_STYLESHEET],
+    )
 
 
 @mcp.tool(
