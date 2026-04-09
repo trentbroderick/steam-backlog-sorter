@@ -97,6 +97,25 @@ def _format_hours(minutes: Optional[int]) -> str:
     return f"{hours:.1f}h"
 
 
+def _format_relative_date(date_str: Optional[str]) -> Optional[str]:
+    """Convert a YYYY-MM-DD string to a human-readable relative date."""
+    if not date_str:
+        return None
+    try:
+        d = datetime.strptime(date_str[:10], "%Y-%m-%d").date()
+        delta = (datetime.now().date() - d).days
+        if delta < 7:
+            return f"{delta}d ago" if delta > 0 else "today"
+        if delta < 30:
+            return f"{delta // 7}w ago"
+        if delta < 365:
+            return f"{delta // 30}mo ago"
+        years = delta // 365
+        return f"{years}y ago"
+    except (ValueError, TypeError):
+        return None
+
+
 def _format_game_summary(game: dict) -> str:
     """Format a single game into a readable summary line."""
     name = game.get("name", "Unknown")
@@ -196,7 +215,7 @@ class GetRecommendationsInput(BaseModel):
         description="What kind of game are you in the mood for? (e.g., 'relaxing', 'intense', 'story-rich', 'quick session', 'classic', 'indie', 'new')"
     )
     genre: Optional[str] = Field(default=None, description="Preferred genre (e.g., 'RPG', 'Action', 'Platformer')")
-    count: Optional[int] = Field(default=5, description="Number of recommendations", ge=1, le=20)
+    count: Optional[int] = Field(default=8, description="Number of recommendations", ge=1, le=20)
     include_in_progress: Optional[bool] = Field(default=True, description="Include games you've already started?")
 
 
@@ -492,6 +511,20 @@ async def _fetch_image_data_url(app_id: int, client: httpx.AsyncClient) -> Optio
     return None
 
 
+def _game_status_badge(g: dict) -> Optional[tuple]:
+    """Return (label, variant) for a game's play status, or None."""
+    status = g.get("status", "")
+    pt = g.get("playtime_minutes") or 0
+    pct = g.get("completion_pct") or 0
+    if pt == 0:
+        return ("🟢 Unplayed", "success")
+    if pct >= 80:
+        return ("🔥 Almost Done", "warning")
+    if status == "in_progress" or pt > 0:
+        return ("🔵 In Progress", "info")
+    return None
+
+
 def _build_game_grid(items, image_data_urls):
     """Render a 3-column grid of game recommendation cards."""
     with Grid(columns=3, gap=4):
@@ -503,17 +536,20 @@ def _build_game_grid(items, image_data_urls):
             app_id = g.get("app_id")
             ach_unlocked = g.get("achievements_unlocked") or 0
             ach_total    = g.get("achievements_total") or 0
-            genre_border = _genre_card_class(g.get("primary_genre", ""))
+            genre        = g.get("primary_genre") or ""
+            genre_border = _genre_card_class(genre)
+            last_played  = _format_relative_date(g.get("last_played_date"))
+            name         = g["name"]
 
             with Card(css_class=f"overflow-hidden {genre_border} transition-all duration-200 hover:scale-[1.02] hover:shadow-xl"):
                 if app_id:
                     img_src = (image_data_urls or {}).get(app_id)
                     if img_src:
-                        Image(src=img_src, alt=g["name"], css_class="w-full object-cover", height="140px")
+                        Image(src=img_src, alt=name, css_class="w-full object-cover", height="140px")
 
                 with CardHeader():
-                    CardTitle(content=f"{i}. {g['name']}", css_class="text-lg font-bold")
-                    CardDescription(content=g.get("developer") or g.get("primary_genre") or "")
+                    CardTitle(content=f"{i}. {name}", css_class="text-lg font-bold")
+                    CardDescription(content=g.get("developer") or genre or "")
 
                 with CardContent():
                     # Review score progress bar with label
@@ -534,20 +570,31 @@ def _build_game_grid(items, image_data_urls):
 
                     # Metadata badges — color-coded by type
                     with Row(gap=2, css_class="mt-2 flex-wrap"):
+                        status_badge = _game_status_badge(g)
+                        if status_badge:
+                            Badge(label=status_badge[0], variant=status_badge[1])
                         deck = g.get("deck_status", "")
                         if deck == "verified":
                             Badge(label="🎮 Deck Verified", variant="success")
                         elif deck == "playable":
                             Badge(label="🎮 Deck Playable", variant="info")
+                        if pt > 0:
+                            Badge(label=f"🕹 {_format_hours(pt)} played", variant="secondary")
                         if hltb:
                             left = max(0, hltb - pt / 60) if pt > 0 else hltb
                             Badge(label=f"⏱ {left:.0f}h {'left' if pt > 0 else 'HLTB'}", variant="secondary")
                         if rs:
                             Badge(label=f"{rs:.0f}% positive", variant=_review_badge_variant(rs))
+                        if genre:
+                            Badge(label=genre, variant="outline")
+                        if last_played:
+                            Badge(label=f"📅 {last_played}", variant="outline")
 
                 with CardFooter():
-                    with Div(css_class="border-l-2 border-blue-500/50 pl-3 w-full"):
-                        Text(f"✨ {'; '.join(reasons[:2])}", css_class="text-sm italic text-muted-foreground")
+                    with Div(css_class="w-full space-y-2"):
+                        with Div(css_class="border-l-2 border-blue-500/50 pl-3"):
+                            Text(f"✨ {'; '.join(reasons[:2])}", css_class="text-sm italic text-muted-foreground")
+                        Muted(f'💬 Try: "Tell me more about {name}" or "Plan a session for {name}"')
 
 
 def _build_recommendations_app(
@@ -581,6 +628,16 @@ def _build_recommendations_app(
                 if hours:
                     Badge(label=f"{hours}h session", variant="outline")
 
+        # Interactivity hint
+        with Alert():
+            AlertTitle("These picks are interactive")
+            AlertDescription(
+                "Click any game and ask me about it — e.g. "
+                "\"Tell me more about [game]\" for a deep dive, "
+                "\"Plan a session for [game]\" for tonight, "
+                "or \"What achievements am I close to finishing in [game]?\""
+            )
+
         # Summary metrics
         with Grid(columns=4, gap=3):
             Metric(
@@ -612,24 +669,27 @@ def _build_recommendations_app(
         # Hero card for #1 pick
         if top:
             _, hero_g, hero_reasons = top[0]
-            hero_pt   = hero_g.get("playtime_minutes") or 0
-            hero_hltb = hero_g.get("hltb_main_hours")
-            hero_pct  = hero_g.get("completion_pct") or 0
-            hero_rs   = hero_g.get("review_score") or 0
-            hero_app  = hero_g.get("app_id")
+            hero_pt    = hero_g.get("playtime_minutes") or 0
+            hero_hltb  = hero_g.get("hltb_main_hours")
+            hero_pct   = hero_g.get("completion_pct") or 0
+            hero_rs    = hero_g.get("review_score") or 0
+            hero_app   = hero_g.get("app_id")
             hero_ach_u = hero_g.get("achievements_unlocked") or 0
             hero_ach_t = hero_g.get("achievements_total") or 0
-            hero_border = _genre_card_class(hero_g.get("primary_genre", ""), hero=True)
+            hero_genre = hero_g.get("primary_genre") or ""
+            hero_border = _genre_card_class(hero_genre, hero=True)
+            hero_last_played = _format_relative_date(hero_g.get("last_played_date"))
+            hero_name  = hero_g["name"]
 
             with Card(css_class=f"overflow-hidden {hero_border} shadow-lg"):
                 if hero_app:
                     img_src = (image_data_urls or {}).get(hero_app)
                     if img_src:
-                        Image(src=img_src, alt=hero_g["name"], css_class="w-full object-cover", height="260px")
+                        Image(src=img_src, alt=hero_name, css_class="w-full object-cover", height="260px")
                 with CardHeader():
-                    CardTitle(content=f"🏆 {hero_g['name']}", css_class="text-2xl font-extrabold")
+                    CardTitle(content=f"🏆 {hero_name}", css_class="text-2xl font-extrabold")
                     CardDescription(
-                        content=hero_g.get("developer") or hero_g.get("primary_genre") or "",
+                        content=hero_g.get("developer") or hero_genre or "",
                         css_class="text-base",
                     )
                 with CardContent():
@@ -646,19 +706,30 @@ def _build_recommendations_app(
                             )
                             Muted(f"{hero_ach_u}/{hero_ach_t} achievements")
                     with Row(gap=2, css_class="mt-3 flex-wrap"):
+                        hero_status = _game_status_badge(hero_g)
+                        if hero_status:
+                            Badge(label=hero_status[0], variant=hero_status[1])
                         hero_deck = hero_g.get("deck_status", "")
                         if hero_deck == "verified":
                             Badge(label="🎮 Deck Verified", variant="success")
                         elif hero_deck == "playable":
                             Badge(label="🎮 Deck Playable", variant="info")
+                        if hero_pt > 0:
+                            Badge(label=f"🕹 {_format_hours(hero_pt)} played", variant="secondary")
                         if hero_hltb:
                             left = max(0, hero_hltb - hero_pt / 60) if hero_pt > 0 else hero_hltb
                             Badge(label=f"⏱ {left:.0f}h {'left' if hero_pt > 0 else 'HLTB'}", variant="secondary")
                         if hero_rs:
                             Badge(label=f"{hero_rs:.0f}% positive", variant=_review_badge_variant(hero_rs))
+                        if hero_genre:
+                            Badge(label=hero_genre, variant="outline")
+                        if hero_last_played:
+                            Badge(label=f"📅 {hero_last_played}", variant="outline")
                 with CardFooter():
-                    with Div(css_class="border-l-2 border-blue-500/50 pl-3 w-full"):
-                        Text(f"✨ {'; '.join(hero_reasons)}", css_class="text-sm italic text-muted-foreground")
+                    with Div(css_class="w-full space-y-2"):
+                        with Div(css_class="border-l-2 border-blue-500/50 pl-3"):
+                            Text(f"✨ {'; '.join(hero_reasons)}", css_class="text-sm italic text-muted-foreground")
+                        Muted(f'💬 Try: "Tell me more about {hero_name}" or "Plan a session for {hero_name}"')
 
         # Tabbed game grid (remaining picks)
         with Tabs():
