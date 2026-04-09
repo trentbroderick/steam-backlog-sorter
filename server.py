@@ -30,6 +30,7 @@ try:
         Metric, Ring, Tabs, Tab,
         DataTable, DataTableColumn,
         Alert, AlertTitle, AlertDescription,
+        Carousel,
     )
     _HAS_PREFAB = True
 except Exception:
@@ -541,6 +542,41 @@ def _build_recommendations_app(
 
         Separator()
 
+        # Featured picks carousel — top 3 games get visual prominence
+        carousel_items = top[:3]
+        if carousel_items:
+            with Carousel(visible=1, gap=16, height=200,
+                          loop=len(carousel_items) > 1,
+                          show_controls=len(carousel_items) > 1,
+                          show_dots=len(carousel_items) > 1,
+                          auto_advance=0):
+                for rank, (score, g, reasons) in enumerate(carousel_items, 1):
+                    rs      = g.get("review_score") or 0
+                    hltb    = g.get("hltb_main_hours")
+                    pt      = g.get("playtime_minutes") or 0
+                    deck    = (g.get("deck_status") or "unknown").title()
+                    app_id  = g.get("app_id")
+                    img_src = (image_data_urls or {}).get(app_id)
+                    hltb_str = ((f"{max(0, hltb - pt/60):.0f}h left" if pt > 0
+                                 else f"{hltb:.0f}h") if hltb else "?")
+
+                    with Card(css_class="overflow-hidden"):
+                        with Row(gap=0):
+                            if img_src:
+                                Image(src=img_src, alt=g["name"],
+                                      css_class="object-cover flex-shrink-0",
+                                      height="200px", width="320px")
+                            with Column(gap=2, css_class="p-4 flex-1"):
+                                with Row(gap=2, css_class="items-center flex-wrap"):
+                                    Heading(f"#{rank} {g['name']}")
+                                    Badge(label=g.get("review_desc", ""),
+                                          variant=_review_badge_variant(rs))
+                                Muted(f"{rs:.0f}% positive · {hltb_str} · Deck: {deck}")
+                                Separator()
+                                Muted("Why: " + "; ".join(reasons[:2]))
+
+        Separator()
+
         # Tabbed game grid
         with Tabs():
             with Tab(f"All Picks"):
@@ -899,6 +935,63 @@ def _build_stats_overview_app(s: dict, ach: Optional[dict]) -> "PrefabApp":
     return PrefabApp(view=dash)
 
 
+def _build_genre_stats_app(rows: list) -> "PrefabApp":
+    """Sortable DataTable of genres with game counts, hours, and avg review."""
+    table_rows = [
+        {
+            "genre":  r["primary_genre"],
+            "games":  r["count"],
+            "played": r["played"],
+            "hours":  round(r["total_hours"] or 0),
+            "review": round(r["avg_review"] or 0),
+        }
+        for r in rows
+    ]
+    with Column(gap=4) as view:
+        Heading("Genre Breakdown")
+        DataTable(
+            columns=[
+                DataTableColumn(key="genre",  header="Genre",        sortable=True, width="25%"),
+                DataTableColumn(key="games",  header="Games",        sortable=True, align="right"),
+                DataTableColumn(key="played", header="Played",       sortable=True, align="right"),
+                DataTableColumn(key="hours",  header="Hours",        sortable=True, align="right"),
+                DataTableColumn(key="review", header="Avg Review %", sortable=True, align="right"),
+            ],
+            rows=table_rows,
+            search=True,
+            paginated=False,
+        )
+    return PrefabApp(view=view)
+
+
+def _build_completion_stats_app(rows: list) -> "PrefabApp":
+    """Sortable DataTable of games ranked by achievement completion."""
+    table_rows = [
+        {
+            "name":     r["name"],
+            "progress": f"{r['achievements_unlocked']}/{r['achievements_total']}",
+            "pct":      round(r["completion_pct"] or 0),
+            "hours":    round(r["hours"] or 0, 1),
+        }
+        for r in rows
+    ]
+    with Column(gap=4) as view:
+        Heading("Achievement Completion Leaderboard")
+        DataTable(
+            columns=[
+                DataTableColumn(key="name",     header="Game",       sortable=True, width="45%"),
+                DataTableColumn(key="progress", header="Progress",   sortable=False),
+                DataTableColumn(key="pct",      header="Complete %", sortable=True, align="right"),
+                DataTableColumn(key="hours",    header="Hours",      sortable=True, align="right"),
+            ],
+            rows=table_rows,
+            search=True,
+            paginated=True,
+            page_size=25,
+        )
+    return PrefabApp(view=view)
+
+
 def _build_game_detail_app(g: dict, achs: list, img_src: Optional[str] = None) -> "PrefabApp":
     """Build a card-based UI for a single game's detail view."""
     pt_hours = (g.get("playtime_minutes") or 0) / 60
@@ -954,12 +1047,30 @@ def _build_game_detail_app(g: dict, achs: list, img_src: Optional[str] = None) -
                             Metric(label="Progress",
                                    value=f"{ach_unlocked}/{ach_total}",
                                    description=f"{pct:.1f}% complete")
-                            # Easiest remaining achievements
-                            locked = [a for a in achs if not a.get("unlocked")]
-                            if locked:
-                                easiest = sorted(locked, key=lambda a: a.get("global_pct") or 0, reverse=True)[:3]
-                                for a in easiest:
-                                    Muted(f"• {a.get('display_name','?')} — {a.get('global_pct',0):.1f}% of players")
+                    # Full achievement DataTable (outside the Ring Row, still inside CardContent)
+                    if achs:
+                        Separator()
+                        ach_table_rows = [
+                            {
+                                "name":       a.get("display_name") or "?",
+                                "global_pct": round(a.get("global_pct") or 0, 1),
+                                "status":     "✓ Unlocked" if a.get("unlocked") else "Locked",
+                                "desc":       a.get("description") or "",
+                            }
+                            for a in achs  # DB query already orders: unlocked DESC, global_pct DESC
+                        ]
+                        DataTable(
+                            columns=[
+                                DataTableColumn(key="name",       header="Achievement",  sortable=True, width="35%"),
+                                DataTableColumn(key="global_pct", header="Players %",    sortable=True, align="right"),
+                                DataTableColumn(key="status",     header="Status",       sortable=True, width="12%"),
+                                DataTableColumn(key="desc",       header="Description",  sortable=False),
+                            ],
+                            rows=ach_table_rows,
+                            search=True,
+                            paginated=True,
+                            page_size=15,
+                        )
 
     return PrefabApp(view=view)
 
@@ -1143,7 +1254,15 @@ async def steam_get_stats(params: GetStatsInput) -> str:
                 lines.append(f"- **{r['primary_genre']}:** {r['count']} games | "
                              f"{r['played']} played | {r['total_hours']:.0f}h total | "
                              f"Avg review: {r['avg_review']:.0f}%")
-            return "\n".join(lines)
+            fallback_text = "\n".join(lines)
+
+            if _HAS_PREFAB:
+                try:
+                    return _build_genre_stats_app(rows)
+                except Exception:
+                    pass
+
+            return fallback_text
 
         elif cat == "completion":
             rows = await _query_turso("""
@@ -1159,7 +1278,15 @@ async def steam_get_stats(params: GetStatsInput) -> str:
                 remaining = r["achievements_total"] - r["achievements_unlocked"]
                 lines.append(f"- **{r['name']}:** {r['achievements_unlocked']}/{r['achievements_total']} "
                              f"({r['completion_pct']:.0f}%)  -  {remaining} left  -  {r['hours']:.1f}h played")
-            return "\n".join(lines)
+            fallback_text = "\n".join(lines)
+
+            if _HAS_PREFAB:
+                try:
+                    return _build_completion_stats_app(rows)
+                except Exception:
+                    pass
+
+            return fallback_text
 
         elif cat == "deck":
             rows = await _query_turso("""
