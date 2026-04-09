@@ -24,8 +24,12 @@ from fastmcp import FastMCP
 try:
     from prefab_ui.app import PrefabApp
     from prefab_ui.components import (
-        Column, Row, Grid, Card, CardContent, CardHeader, CardTitle, CardDescription,
+        Column, Row, Grid, Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription,
+        Dashboard, DashboardItem,
         Heading, Badge, Muted, Separator, Image, Progress,
+        Metric, Ring, Tabs, Tab,
+        DataTable, DataTableColumn,
+        Alert, AlertTitle, AlertDescription,
     )
     _HAS_PREFAB = True
 except Exception:
@@ -426,50 +430,127 @@ async def _fetch_image_data_url(app_id: int, client: httpx.AsyncClient) -> Optio
     return None
 
 
-def _build_recommendations_app(top, device_label: str, mood: Optional[str], hours: Optional[float], image_data_urls: Optional[Dict[int, str]] = None) -> "PrefabApp":
-    subtitle_bits = []
-    if mood:  subtitle_bits.append(f"mood: {mood}")
-    if hours: subtitle_bits.append(f"{hours}h available")
-    subtitle = " • ".join(subtitle_bits) if subtitle_bits else "Personalized picks from your library"
+def _build_game_grid(items, image_data_urls):
+    """Render a 3-column grid of game recommendation cards."""
+    with Grid(columns=3, gap=4):
+        for i, (score, g, reasons) in enumerate(items, 1):
+            pt     = g.get("playtime_minutes") or 0
+            hltb   = g.get("hltb_main_hours")
+            pct    = g.get("completion_pct") or 0
+            rs     = g.get("review_score") or 0
+            app_id = g.get("app_id")
+            ach_unlocked = g.get("achievements_unlocked") or 0
+            ach_total    = g.get("achievements_total") or 0
+
+            with Card(css_class="overflow-hidden"):
+                if app_id:
+                    img_src = (image_data_urls or {}).get(app_id)
+                    if img_src:
+                        Image(src=img_src, alt=g["name"], css_class="w-full object-cover", height="140px")
+
+                with CardHeader():
+                    CardTitle(content=f"{i}. {g['name']}")
+                    CardDescription(content=g.get("developer") or g.get("primary_genre") or "")
+
+                with CardContent():
+                    # Review score progress bar
+                    Progress(value=int(rs), min=0, max=100, variant=_review_badge_variant(rs))
+
+                    # Achievement Ring (if the game has achievements and has been played)
+                    if pct > 0 and ach_total > 0:
+                        with Row(gap=3, css_class="mt-3 items-center"):
+                            Ring(
+                                value=int(pct), min=0, max=100,
+                                label=f"{pct:.0f}%",
+                                size="sm",
+                                variant=_review_badge_variant(pct),
+                            )
+                            Muted(f"{ach_unlocked}/{ach_total} achievements")
+
+                    # Metadata badges
+                    with Row(gap=2, css_class="mt-2 flex-wrap"):
+                        deck = g.get("deck_status", "")
+                        if deck in ("verified", "playable"):
+                            Badge(label=f"🎮 Deck {deck}", variant="outline")
+                        if hltb:
+                            left = max(0, hltb - pt / 60) if pt > 0 else hltb
+                            Badge(label=f"⏱ {left:.0f}h {'left' if pt > 0 else 'HLTB'}", variant="outline")
+                        if rs:
+                            Badge(label=f"{rs:.0f}% positive", variant=_review_badge_variant(rs))
+
+                with CardFooter():
+                    Muted(f"Why: {'; '.join(reasons[:2])}")
+
+
+def _build_recommendations_app(
+    top,
+    device_label: str,
+    mood: Optional[str],
+    hours: Optional[float],
+    image_data_urls: Optional[Dict[int, str]] = None,
+    total_candidates: int = 0,
+) -> "PrefabApp":
+    # Summary stats
+    avg_review = (sum(g.get("review_score") or 0 for _, g, _ in top) / len(top)) if top else 0
+    total_est_hours = sum(
+        max(0, (g.get("hltb_main_hours") or 0) - ((g.get("playtime_minutes") or 0) / 60))
+        for _, g, _ in top
+    )
+
+    # Tab subsets
+    almost_done = [(s, g, r) for s, g, r in top
+                   if (g.get("completion_pct") or 0) >= 50 and (g.get("playtime_minutes") or 0) > 0]
+    quick_plays = [(s, g, r) for s, g, r in top
+                   if 0 < (g.get("hltb_main_hours") or 999) <= 5]
 
     with Column(gap=4) as view:
-        Heading(f"🎮 Recommended for {device_label}")
-        Muted(subtitle)
+        # Header row
+        with Row(gap=2, css_class="items-center justify-between flex-wrap"):
+            Heading(f"🎮 Recommended for {device_label}")
+            with Row(gap=2):
+                if mood:
+                    Badge(label=mood.title(), variant="secondary")
+                if hours:
+                    Badge(label=f"{hours}h session", variant="outline")
+
+        # Summary metrics
+        with Grid(columns=4, gap=3):
+            Metric(
+                label="Picks",
+                value=str(len(top)),
+                description=f"of {total_candidates} analyzed" if total_candidates else None,
+            )
+            Metric(
+                label="Avg Review",
+                value=f"{avg_review:.0f}%",
+                description="of top picks",
+            )
+            Metric(
+                label="Est. Hours",
+                value=f"{total_est_hours:.0f}h",
+                description="to finish them all",
+            )
+            if top:
+                _, best_game, best_reasons = top[0]
+                best_name = best_game["name"]
+                Metric(
+                    label="Top Pick",
+                    value=best_name[:20] + ("…" if len(best_name) > 20 else ""),
+                    description=(best_reasons[0][:40] if best_reasons else None),
+                )
+
         Separator()
-        with Grid(columns=3, gap=4):
-            for i, (score, g, reasons) in enumerate(top, 1):
-                pt   = g.get("playtime_minutes") or 0
-                hltb = g.get("hltb_main_hours")
-                pct  = g.get("completion_pct") or 0
-                rs   = g.get("review_score") or 0
-                app_id = g.get("app_id")
-                with Card(css_class="overflow-hidden"):
-                    if app_id:
-                        img_src = (image_data_urls or {}).get(app_id)
-                        if img_src:
-                            Image(
-                                src=img_src,
-                                alt=g["name"],
-                                css_class="w-full object-cover",
-                                height="140px",
-                            )
-                    with CardHeader():
-                        CardTitle(content=f"{i}. {g['name']}")
-                        CardDescription(content=g.get("developer") or g.get("primary_genre") or "")
-                    with CardContent():
-                        Progress(value=int(rs), min=0, max=100, variant=_review_badge_variant(rs))
-                        with Row(gap=2, css_class="mt-2 flex-wrap"):
-                            deck = g.get("deck_status", "")
-                            if deck in ("verified", "playable"):
-                                Badge(label=f"🎮 Deck {deck}", variant="outline")
-                            if hltb:
-                                left = max(0, hltb - pt / 60) if pt > 0 else hltb
-                                Badge(label=f"⏱ {left:.0f}h {'left' if pt > 0 else 'HLTB'}", variant="outline")
-                            if pct > 0:
-                                Badge(label=f"⭐ {pct:.0f}%", variant="outline")
-                            if rs:
-                                Badge(label=f"{rs:.0f}% positive", variant=_review_badge_variant(rs))
-                        Muted(f"Why: {'; '.join(reasons[:2])}")
+
+        # Tabbed game grid
+        with Tabs():
+            with Tab(f"All Picks"):
+                _build_game_grid(top, image_data_urls)
+            if almost_done:
+                with Tab(f"Almost Done ({len(almost_done)})"):
+                    _build_game_grid(almost_done, image_data_urls)
+            if quick_plays:
+                with Tab(f"Quick Plays ({len(quick_plays)})"):
+                    _build_game_grid(quick_plays, image_data_urls)
 
     return PrefabApp(view=view)
 
@@ -637,6 +718,7 @@ async def steam_get_recommendations(params: GetRecommendationsInput):
 
         # Sort by score, take top N
         scored.sort(key=lambda x: x[0], reverse=True)
+        total_candidates = len(scored)
         top = scored[:params.count]
 
         device_label = {
@@ -686,7 +768,7 @@ async def steam_get_recommendations(params: GetRecommendationsInput):
                     for aid, url in zip(app_ids, results)
                     if isinstance(url, str)
                 }
-                return _build_recommendations_app(top, device_label, params.mood, params.available_hours, image_data_urls)
+                return _build_recommendations_app(top, device_label, params.mood, params.available_hours, image_data_urls, total_candidates=total_candidates)
             except Exception:
                 pass
 
@@ -758,8 +840,133 @@ async def steam_debug() -> str:
     return "\n".join(lines)
 
 
+def _build_stats_overview_app(s: dict, ach: Optional[dict]) -> "PrefabApp":
+    """Build a Dashboard UI for the library overview stats."""
+    total       = s["total"] or 1
+    played      = s["played"] or 0
+    unplayed    = s["unplayed"] or 0
+    completed   = s["completed"] or 0
+    abandoned   = s["abandoned"] or 0
+    perfect     = s["perfect_games"] or 0
+    total_hrs   = (s["total_playtime"] or 0) / 60
+    avg_review  = s["avg_review"] or 0
+    played_pct  = played / total * 100
+
+    ach_unlocked = (ach.get("unlocked") or 0) if ach else 0
+    ach_total    = (ach.get("total") or 1) if ach else 1
+    ach_pct      = ach_unlocked / ach_total * 100
+
+    with Dashboard(columns=4, row_height=110, gap=4) as dash:
+        # Row 1: heading
+        with DashboardItem(col=1, row=1, col_span=4):
+            Heading("📊 Steam Library Overview")
+
+        # Row 2: four key metrics
+        with DashboardItem(col=1, row=2):
+            Metric(label="Total Games", value=f"{total:,}")
+        with DashboardItem(col=2, row=2):
+            Metric(label="Played", value=f"{played_pct:.0f}%", description=f"{played:,} of {total:,} games")
+        with DashboardItem(col=3, row=2):
+            Metric(label="Total Playtime", value=f"{total_hrs:,.0f}h", description=f"{total_hrs/24:.0f} days")
+        with DashboardItem(col=4, row=2):
+            Metric(label="Avg Review", value=f"{avg_review:.1f}%", description="across library")
+
+        # Row 3–4: achievement ring (tall) + smaller metric tiles
+        with DashboardItem(col=1, row=3, col_span=2, row_span=2):
+            with Card():
+                with CardHeader():
+                    CardTitle("Achievement Progress")
+                with CardContent():
+                    with Row(gap=4, css_class="items-center"):
+                        Ring(
+                            value=int(ach_pct), min=0, max=100,
+                            label=f"{ach_pct:.1f}%",
+                            size="lg",
+                            variant="success" if ach_pct >= 80 else ("warning" if ach_pct >= 50 else "default"),
+                        )
+                        with Column(gap=1):
+                            Metric(label="Unlocked", value=f"{ach_unlocked:,}", description=f"of {ach_total:,} total")
+
+        with DashboardItem(col=3, row=3):
+            Metric(label="100% Perfect", value=str(perfect), description="fully completed")
+        with DashboardItem(col=4, row=3):
+            Metric(label="Marked Done", value=str(completed))
+        with DashboardItem(col=3, row=4):
+            Metric(label="Unplayed", value=f"{unplayed:,}", description=f"{unplayed/total*100:.0f}% of library")
+        with DashboardItem(col=4, row=4):
+            Metric(label="Abandoned", value=str(abandoned))
+
+    return PrefabApp(view=dash)
+
+
+def _build_game_detail_app(g: dict, achs: list, img_src: Optional[str] = None) -> "PrefabApp":
+    """Build a card-based UI for a single game's detail view."""
+    pt_hours = (g.get("playtime_minutes") or 0) / 60
+    pct      = g.get("completion_pct") or 0
+    rs       = g.get("review_score") or 0
+    hltb     = g.get("hltb_main_hours")
+    ach_unlocked = g.get("achievements_unlocked") or 0
+    ach_total    = g.get("achievements_total") or 0
+    deck     = (g.get("deck_status") or "unknown").title()
+
+    with Column(gap=4) as view:
+        # Hero card
+        with Card(css_class="overflow-hidden"):
+            if img_src:
+                Image(src=img_src, alt=g["name"], css_class="w-full object-cover", height="200px")
+            with CardHeader():
+                CardTitle(content=g["name"])
+                with Row(gap=2, css_class="flex-wrap mt-1"):
+                    if g.get("developer"):
+                        Badge(label=g["developer"], variant="secondary")
+                    if g.get("primary_genre"):
+                        Badge(label=g["primary_genre"], variant="outline")
+                    Badge(label=f"🎮 Deck: {deck}", variant="outline")
+                    if g.get("status"):
+                        Badge(label=g["status"].replace("_", " ").title(), variant="outline")
+
+        # Key metrics row
+        with Grid(columns=4, gap=3):
+            Metric(label="Playtime", value=f"{pt_hours:.1f}h",
+                   description=g.get("last_played_date") and f"Last: {g['last_played_date']}")
+            Metric(label="Steam Review", value=f"{rs:.0f}%", description=g.get("review_desc"))
+            if hltb:
+                remaining = max(0.0, hltb - pt_hours)
+                Metric(label="Remaining", value=f"~{remaining:.0f}h",
+                       description=f"HLTB: {hltb:.0f}h main")
+            if g.get("metacritic"):
+                Metric(label="Metacritic", value=str(g["metacritic"]))
+
+        # Achievement card (only when the game has them)
+        if ach_total > 0:
+            with Card():
+                with CardHeader():
+                    CardTitle("Achievements")
+                with CardContent():
+                    with Row(gap=4, css_class="items-center"):
+                        Ring(
+                            value=int(pct), min=0, max=100,
+                            label=f"{pct:.0f}%",
+                            size="lg",
+                            variant=_review_badge_variant(pct),
+                        )
+                        with Column(gap=2):
+                            Metric(label="Progress",
+                                   value=f"{ach_unlocked}/{ach_total}",
+                                   description=f"{pct:.1f}% complete")
+                            # Easiest remaining achievements
+                            locked = [a for a in achs if not a.get("unlocked")]
+                            if locked:
+                                easiest = sorted(locked, key=lambda a: a.get("global_pct") or 0, reverse=True)[:3]
+                                for a in easiest:
+                                    Muted(f"• {a.get('display_name','?')} — {a.get('global_pct',0):.1f}% of players")
+
+    return PrefabApp(view=view)
+
+
 @mcp.tool(
     name="steam_get_game_detail",
+    app=True,
     annotations={
         "title": "Get Game Details",
         "readOnlyHint": True,
@@ -768,7 +975,7 @@ async def steam_debug() -> str:
         "openWorldHint": False
     }
 )
-async def steam_get_game_detail(params: GetGameDetailInput) -> str:
+async def steam_get_game_detail(params: GetGameDetailInput):
     """Get detailed information about a specific game including full achievement list.
 
     Look up any game by name (partial match supported). Returns playtime, achievements
@@ -786,6 +993,18 @@ async def steam_get_game_detail(params: GetGameDetailInput) -> str:
             return f"No game found matching '{params.game_name}'. Try a shorter search term."
 
         g = games[0]
+
+        # Fetch achievements if applicable
+        achs = []
+        if g.get("achievements_total") and g["achievements_total"] > 0:
+            achs = await _query_turso(
+                """SELECT display_name, description, unlocked, unlock_time, global_pct
+                   FROM achievements WHERE app_id = ?
+                   ORDER BY unlocked DESC, global_pct DESC""",
+                [g["app_id"]]
+            )
+
+        # Build text fallback for LLM context
         lines = [f"# {g['name']}\n"]
         lines.append(f"**App ID:** {g['app_id']}")
         lines.append(f"**Developer:** {g.get('developer', 'Unknown')} | **Publisher:** {g.get('publisher', 'Unknown')}")
@@ -793,23 +1012,17 @@ async def steam_get_game_detail(params: GetGameDetailInput) -> str:
         lines.append(f"**Release Date:** {g.get('release_date', 'Unknown')}")
         lines.append(f"**Status:** {g.get('status', 'Unknown')}")
         lines.append("")
-
-        # Play stats
         lines.append("## Play Stats")
         lines.append(f"- **Playtime:** {_format_hours(g.get('playtime_minutes'))}")
         if g.get("last_played_date"):
             lines.append(f"- **Last Played:** {g['last_played_date']}")
         lines.append(f"- **Achievements:** {g.get('achievements_unlocked', 0)}/{g.get('achievements_total', 0)} ({g.get('completion_pct', 0):.1f}%)")
         lines.append("")
-
-        # Reviews & ratings
         lines.append("## Reviews & Ratings")
         lines.append(f"- **Steam Reviews:** {g.get('review_desc', 'N/A')} ({g.get('review_score', 0):.0f}% from {g.get('review_count', 0):,} reviews)")
         if g.get("metacritic"):
             lines.append(f"- **Metacritic:** {g['metacritic']}")
         lines.append("")
-
-        # HLTB
         lines.append("## How Long to Beat")
         lines.append(f"- **Main Story:** {g.get('hltb_main_hours', '?')}h")
         lines.append(f"- **Main + Extras:** {g.get('hltb_extra_hours', '?')}h")
@@ -819,37 +1032,33 @@ async def steam_get_game_detail(params: GetGameDetailInput) -> str:
             if remaining > 0:
                 lines.append(f"- **Estimated Remaining:** ~{remaining:.0f}h (main story)")
         lines.append("")
-
-        # Deck
         lines.append(f"## Steam Deck: **{g.get('deck_status', 'unknown').upper()}**\n")
-
-        # Achievements detail
-        if g.get("achievements_total") and g["achievements_total"] > 0:
-            achs = await _query_turso(
-                """SELECT display_name, description, unlocked, unlock_time, global_pct
-                   FROM achievements WHERE app_id = ?
-                   ORDER BY unlocked DESC, global_pct DESC""",
-                [g["app_id"]]
-            )
-
-            if achs:
-                unlocked = [a for a in achs if a.get("unlocked")]
-                locked = [a for a in achs if not a.get("unlocked")]
-
-                lines.append(f"## Achievements ({len(unlocked)}/{len(achs)} unlocked)\n")
-
-                if locked:
-                    # Show easiest locked achievements (highest global %)
-                    lines.append("### Easiest Remaining:")
-                    for a in sorted(locked, key=lambda x: x.get("global_pct", 0), reverse=True)[:10]:
-                        desc = f"  -  {a['description']}" if a.get("description") else ""
-                        lines.append(f"- {a.get('display_name', a.get('api_name', '?'))}{desc} ({a.get('global_pct', 0):.1f}% of players)")
-                    lines.append("")
-
+        if achs:
+            unlocked_list = [a for a in achs if a.get("unlocked")]
+            locked_list   = [a for a in achs if not a.get("unlocked")]
+            lines.append(f"## Achievements ({len(unlocked_list)}/{len(achs)} unlocked)\n")
+            if locked_list:
+                lines.append("### Easiest Remaining:")
+                for a in sorted(locked_list, key=lambda x: x.get("global_pct", 0), reverse=True)[:10]:
+                    desc = f"  -  {a['description']}" if a.get("description") else ""
+                    lines.append(f"- {a.get('display_name', a.get('api_name', '?'))}{desc} ({a.get('global_pct', 0):.1f}% of players)")
+                lines.append("")
         if g.get("user_notes"):
             lines.append(f"## Notes\n{g['user_notes']}\n")
+        fallback_text = "\n".join(lines)
 
-        return "\n".join(lines)
+        # Prefab UI
+        if _HAS_PREFAB:
+            try:
+                img_src = None
+                if g.get("app_id"):
+                    async with httpx.AsyncClient() as client:
+                        img_src = await _fetch_image_data_url(g["app_id"], client)
+                return _build_game_detail_app(g, achs, img_src)
+            except Exception:
+                pass
+
+        return fallback_text
 
     except Exception as e:
         return f"Error getting game details: {e}"
@@ -857,6 +1066,7 @@ async def steam_get_game_detail(params: GetGameDetailInput) -> str:
 
 @mcp.tool(
     name="steam_get_stats",
+    app=True,
     annotations={
         "title": "Get Library Statistics",
         "readOnlyHint": True,
@@ -890,6 +1100,11 @@ async def steam_get_stats(params: GetStatsInput) -> str:
             s = rows[0]
             total_hrs = (s["total_playtime"] or 0) / 60
 
+            # Achievement stats
+            ach_rows = await _query_turso("SELECT SUM(achievements_unlocked) as unlocked, SUM(achievements_total) as total FROM games WHERE achievements_total > 0")
+            ach = ach_rows[0] if ach_rows else None
+
+            # Text fallback
             lines = [
                 "# Steam Library Overview\n",
                 f"- **Total Games:** {s['total']}",
@@ -901,12 +1116,14 @@ async def steam_get_stats(params: GetStatsInput) -> str:
                 f"- **Total Playtime:** {total_hrs:,.0f} hours ({total_hrs/24:.0f} days)",
                 f"- **Average Review Score:** {s['avg_review']:.1f}%",
             ]
+            if ach:
+                lines.append(f"- **Achievements:** {ach['unlocked']:,}/{ach['total']:,} ({ach['unlocked']/ach['total']*100:.1f}%)")
 
-            # Achievement stats
-            ach_rows = await _query_turso("SELECT SUM(achievements_unlocked) as unlocked, SUM(achievements_total) as total FROM games WHERE achievements_total > 0")
-            if ach_rows:
-                a = ach_rows[0]
-                lines.append(f"- **Achievements:** {a['unlocked']:,}/{a['total']:,} ({a['unlocked']/a['total']*100:.1f}%)")
+            if _HAS_PREFAB:
+                try:
+                    return _build_stats_overview_app(s, ach)
+                except Exception:
+                    pass
 
             return "\n".join(lines)
 
